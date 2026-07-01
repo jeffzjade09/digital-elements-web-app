@@ -208,6 +208,15 @@
   .social-add input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 6px 9px; font-size: 12px; }
   .social-add input.plat { flex: 0 0 120px; }
   .linkx { color: var(--fail); cursor: pointer; background: none; border: 0; font-size: 12px; padding: 0 4px; }
+
+  /* Unfinished-setup banner */
+  .setup-banner { background: rgba(240,180,80,0.08); border: 1px solid rgba(240,180,80,0.35); border-radius: 12px; padding: 12px 16px; margin-bottom: 14px; }
+  .setup-banner .banner-head { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; color: #f0c368; }
+  .setup-banner ul { list-style: none; margin: 8px 0 0; padding: 0; }
+  .setup-banner li { font-size: 13px; color: var(--text); padding: 4px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .setup-banner li .reason { color: var(--muted); }
+  .banner-fix { background: transparent; border: 1px solid var(--accent); color: var(--accent); border-radius: 6px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
+  .banner-x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
 </style>
 </head>
 <body>
@@ -232,6 +241,7 @@
     </div>
   </header>
 
+  <div id="setupBanner" class="setup-banner" style="display:none"></div>
   <div class="summary" id="summary"></div>
   <div id="board"></div>
   <footer class="note" id="foot"></footer>
@@ -251,6 +261,8 @@ const CHECKS = [
 
 let pollTimer = null;
 let latestData = null;
+let WEBSITES = [];
+let bannerDismissed = false;
 let modalTasks = [];
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const openRows = new Set();
@@ -294,11 +306,26 @@ function stopPolling() {
 
 function render(data) {
   latestData = data;
-  const sites = Object.values(data.sites || {});
+  const results = data.sites || {};
+  // The database is the source of truth for WHICH sites exist. Attach the latest
+  // sweep results to each; sites added but not yet swept show as pending.
+  let sites;
+  if (WEBSITES && WEBSITES.length) {
+    sites = WEBSITES.map((w) => {
+      const r = results[w.id];
+      return r
+        ? { ...r, name: w.name, url: w.url }
+        : { id: w.id, name: w.name, url: w.url, overall: "skip", checks: {}, pending: true };
+    });
+  } else {
+    sites = Object.values(results);
+  }
   const lr = document.getElementById("lastRun");
   lr.innerHTML = data.lastRun
     ? "Last sweep<br><b>" + new Date(data.lastRun).toLocaleString() + "</b>"
     : "No sweeps yet";
+
+  renderSetupBanner();
 
   // Summary
   const counts = { ok: 0, warn: 0, fail: 0 };
@@ -311,7 +338,7 @@ function render(data) {
 
   const board = document.getElementById("board");
   if (!sites.length) {
-    board.innerHTML = '<div class="empty"><h3>No sites yet</h3><p>Add sites to <code>config/sites.json</code>, then run a sweep.</p></div>';
+    board.innerHTML = '<div class="empty"><h3>No sites yet</h3><p>Use <b>+ Website</b> in the header to add your first site.</p></div>';
     return;
   }
 
@@ -487,6 +514,7 @@ async function boot() {
   document.getElementById("me-role").textContent = ROLE_LABELS[ME.user.role] || ME.user.role;
   if (ME.perms.manageWebsites) document.getElementById("addSiteBtn").style.display = "inline-block";
   if (ME.perms.manageUsers) document.getElementById("usersBtn").style.display = "inline-block";
+  await refreshWebsites();
   load();
 }
 
@@ -522,9 +550,53 @@ function closeWebsiteModal() {
   document.getElementById("siteModal").classList.remove("show");
   document.body.style.overflow = "";
 }
+async function refreshWebsites() {
+  try {
+    const res = await fetch("/api/websites");
+    const j = await res.json();
+    if (j.ok) WEBSITES = j.websites || [];
+  } catch (e) { /* keep previous cache */ }
+  return WEBSITES;
+}
+
+// Re-sync from the DB and kick off a fresh sweep so changes show immediately.
+function afterMutation() {
+  bannerDismissed = false;
+  refreshWebsites().then(() => render(latestData || { sites: {} }));
+  fetch("/api/check", { method: "POST" }).then(() => startPolling()).catch(() => {});
+}
+
+function incompleteReasons(w) {
+  const r = [];
+  if (!w.helper || !w.helper.enabled) r.push("Updates not set up (no helper plugin)");
+  else if (!w.helper.endpoint || !w.helper.token) r.push("Helper endpoint or token missing");
+  if (w.clickup && w.clickup.enabled && (!w.clickup.listIds || !w.clickup.listIds.length)) r.push("ClickUp enabled but no List IDs");
+  return r;
+}
+
+function renderSetupBanner() {
+  const el = document.getElementById("setupBanner");
+  if (!el) return;
+  if (bannerDismissed) { el.style.display = "none"; return; }
+  const flagged = (WEBSITES || []).map((w) => ({ w, reasons: incompleteReasons(w) })).filter((x) => x.reasons.length);
+  if (!flagged.length) { el.style.display = "none"; return; }
+  const canEdit = !!(ME.perms && ME.perms.manageWebsites);
+  const items = flagged.map(({ w, reasons }) =>
+    `<li><b>${esc(w.name)}</b><span class="reason">${esc(reasons.join(" · "))}</span>${canEdit ? `<button class="banner-fix" onclick="editWebsite('${w.id}')">Complete setup</button>` : ""}</li>`
+  ).join("");
+  el.innerHTML = `<div class="banner-head"><span>⚠ ${flagged.length} website${flagged.length > 1 ? "s" : ""} need setup</span><button class="banner-x" onclick="dismissBanner()">✕</button></div><ul>${items}</ul>`;
+  el.style.display = "block";
+}
+function dismissBanner() {
+  bannerDismissed = true;
+  document.getElementById("setupBanner").style.display = "none";
+}
+
 async function editWebsite(id) {
-  const site = latestData && latestData.sites[id];
+  let site = WEBSITES.find((w) => w.id === id);
+  if (!site) { await refreshWebsites(); site = WEBSITES.find((w) => w.id === id); }
   if (site) openWebsiteModal(site);
+  else alert("Couldn't load this site's saved settings. Try reloading the page.");
 }
 async function saveWebsite() {
   const g = (id) => document.getElementById(id);
@@ -540,7 +612,7 @@ async function saveWebsite() {
     const res = await fetch(url, { method: editingSiteId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await res.json();
     if (!j.ok) throw new Error(j.error || "Save failed");
-    closeWebsiteModal(); load();
+    closeWebsiteModal(); afterMutation();
   } catch (e) {
     const err = g("siteModalErr"); err.style.display = "block"; err.textContent = e.message;
   } finally { btn.disabled = false; btn.textContent = "Save"; }
@@ -549,7 +621,7 @@ async function deleteWebsite(id, name) {
   if (!confirm(`Delete "${name}"? This removes it from monitoring.`)) return;
   const res = await fetch("/api/websites/" + id, { method: "DELETE" });
   const j = await res.json();
-  if (j.ok) load(); else alert(j.error || "Delete failed");
+  if (j.ok) afterMutation(); else alert(j.error || "Delete failed");
 }
 
 // ---- Users (admin) ----

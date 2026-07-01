@@ -105,8 +105,12 @@ function normalizeWebsite(b) {
 app.post("/api/websites", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
   const d = normalizeWebsite(req.body);
   if (!d.name || !d.url) return res.status(400).json({ ok: false, error: "Name and URL are required" });
-  try { res.json({ ok: true, website: await createWebsite(d, req.user.id) }); }
-  catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+  try {
+    const website = await createWebsite(d, req.user.id);
+    console.log(`[websites] created "${website.name}" (${website.id})`);
+    res.json({ ok: true, website });
+  }
+  catch (err) { console.error("[websites] create failed:", err.message); res.status(500).json({ ok: false, error: err.message }); }
 });
 
 app.put("/api/websites/:id", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
@@ -120,8 +124,8 @@ app.put("/api/websites/:id", requireAuth, requirePerm("manageWebsites"), async (
 });
 
 app.delete("/api/websites/:id", requireAuth, requirePerm("deleteWebsite"), async (req, res) => {
-  try { await deleteWebsite(req.params.id); res.json({ ok: true }); }
-  catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+  try { await deleteWebsite(req.params.id); console.log(`[websites] deleted ${req.params.id}`); res.json({ ok: true }); }
+  catch (err) { console.error("[websites] delete failed:", err.message); res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ---- Users (admin only) ----
