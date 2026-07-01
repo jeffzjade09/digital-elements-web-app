@@ -14,6 +14,22 @@ import { checkClickUp } from "./checks/clickup.js";
 // (open tasks are informational, not a site-health problem).
 const RANK = { ok: 0, skip: 0, info: 0, warn: 1, fail: 2 };
 
+// PageSpeed is slow and rate-limited, so we cache each site's score and only
+// re-run it once its result is older than pageSpeed.minIntervalMs (default 2 min).
+// This lets the rest of the sweep run frequently for a near-live dashboard.
+const psCache = new Map(); // url -> { result, ts }
+
+async function getPageSpeedCached(url, settings) {
+  const ttl = settings.pageSpeed.minIntervalMs || 120000;
+  const hit = psCache.get(url);
+  if (hit && Date.now() - hit.ts < ttl) {
+    return { ...hit.result, detail: hit.result.detail, cached: true };
+  }
+  const result = await checkPageSpeed(url, settings.pageSpeed);
+  psCache.set(url, { result, ts: Date.now() });
+  return result;
+}
+
 function rollUp(checks) {
   let worst = "ok";
   for (const c of Object.values(checks)) {
@@ -28,7 +44,7 @@ async function checkOneSite(site, settings) {
 
   const [ssl, pagespeed, plugins, clickup] = await Promise.all([
     checkSsl(site.url, settings.sslWarnDays),
-    checkPageSpeed(fetchResult.finalUrl || site.url, settings.pageSpeed),
+    getPageSpeedCached(fetchResult.finalUrl || site.url, settings),
     checkPlugins(site.helper),
     checkClickUp(site.clickup, settings.clickup),
   ]);

@@ -1,6 +1,5 @@
 // Schedules background checks and dispatches alerts when statuses change.
 
-import cron from "node-cron";
 import { loadSites, loadResults, saveResults } from "./store.js";
 import { runAll } from "./runner.js";
 import { diffRuns, dispatchAlerts } from "./alerts.js";
@@ -32,15 +31,12 @@ export function isCheckRunning() {
 }
 
 export function startScheduler(settings) {
-  if (!cron.validate(settings.cron)) {
-    console.error(`[scheduler] Invalid CHECK_CRON "${settings.cron}" — scheduler disabled.`);
-    return;
-  }
-  cron.schedule(settings.cron, () => {
-    console.log("[scheduler] Running scheduled check…");
+  const secs = Math.max(15, settings.sweepIntervalSeconds || 60);
+  const psSecs = Math.round((settings.pageSpeed.minIntervalMs || 120000) / 1000);
+  setInterval(() => {
     runOnce(settings, { alert: true }).catch((err) =>
       console.error("[scheduler] Run failed:", err.message)
     );
-  });
-  console.log(`[scheduler] Background checks scheduled: "${settings.cron}"`);
+  }, secs * 1000);
+  console.log(`[scheduler] Sweeping every ${secs}s · PageSpeed refreshed at most every ${psSecs}s · alerts on change`);
 }
