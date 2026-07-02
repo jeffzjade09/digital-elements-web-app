@@ -2,24 +2,26 @@
 /**
  * Plugin Name: Digital Elements Helper Plugin
  * Description: Connects this site to the Digital Elements Site Monitor. Adds an admin panel showing HTTPS, SSL, Cloudflare, CTM, Google Tag, PageSpeed, and update status, plus a secure, read-only endpoint the central dashboard reads. It cannot modify the site, access content, or run updates.
- * Version:     1.1
+ * Version:     1.2
  * Author:      Digital Elements Group
  * Author URI:  https://digitalelementsgroup.com/
  * Plugin URI:  https://digitalelementsgroup.com/
  *
  * ──────────────────────────────────────────────────────────────────────────
- * SECURITY / SETUP
+ * SETUP (client-friendly)
  *
- * 1) Dashboard access secret (for the central monitor) — store a SHA-256 HASH
- *    of your token in wp-config.php, never the raw token:
- *        define( 'WPMONITOR_TOKEN_HASH', 'your-sha256-hash-here' );
+ * 1) In the Digital Elements dashboard, add this website. A unique license key
+ *    is generated for it (format DEG-XXXXX-XXXXX-XXXXX-XXXXX).
+ * 2) Install & activate this plugin, then go to WP Admin → Site Monitor and
+ *    paste the license key into the "Monitoring license" field. That's it —
+ *    no wp-config.php editing required.
  *
- * 2) PageSpeed API key (optional, for the PageSpeed card) — either:
- *        define( 'WPMONITOR_PSI_KEY', 'your-google-api-key' );   // wp-config.php
- *    or paste it into the field on the admin panel.
+ * The license key is the shared secret the dashboard uses to read this site's
+ * status. Its expiry is managed from the dashboard; a defined WPMONITOR_TOKEN /
+ * WPMONITOR_TOKEN_HASH in wp-config.php still works for older installs.
  *
- * Generate a token + its hash on the dashboard machine:
- *    node -e "const c=require('crypto');const t=c.randomBytes(24).toString('hex');console.log('TOKEN:',t);console.log('HASH :',c.createHash('sha256').update(t).digest('hex'))"
+ * PageSpeed API key (optional): paste it on the admin panel, or define
+ * WPMONITOR_PSI_KEY in wp-config.php.
  * ──────────────────────────────────────────────────────────────────────────
  */
 
@@ -27,9 +29,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('DEHELED_VERSION', '1.1');
+define('DEHELED_VERSION', '1.2');
 define('DEHELED_CACHE_KEY', 'deheled_status_cache');
 define('DEHELED_PSI_OPTION', 'deheled_psi_key');
+define('DEHELED_LICENSE_OPTION', 'deheled_license_key');
 
 /* =========================================================================
  * 1. REST endpoint for the central dashboard (kept lean: updates only)
@@ -47,6 +50,12 @@ function deheled_validate_token($provided) {
     if (!is_string($provided) || $provided === '') {
         return false;
     }
+    // Preferred: the license key entered in Site Monitor settings (no wp-config needed).
+    $license = get_option(DEHELED_LICENSE_OPTION, '');
+    if (is_string($license) && $license !== '' && hash_equals((string) $license, $provided)) {
+        return true;
+    }
+    // Backward compatible: token/hash defined in wp-config.php.
     if (defined('WPMONITOR_TOKEN_HASH') && WPMONITOR_TOKEN_HASH !== '') {
         return hash_equals(strtolower((string) WPMONITOR_TOKEN_HASH), hash('sha256', $provided));
     }
@@ -319,6 +328,16 @@ add_action('admin_menu', function () {
     );
 });
 
+// Save the monitoring license key from the client (nonce-protected).
+add_action('admin_post_deheled_save_license', function () {
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    check_admin_referer('deheled_save_license');
+    $key = isset($_POST['license_key']) ? sanitize_text_field(wp_unslash($_POST['license_key'])) : '';
+    update_option(DEHELED_LICENSE_OPTION, $key);
+    wp_safe_redirect(add_query_arg('saved', '1', admin_url('admin.php?page=deheled-monitor')));
+    exit;
+});
+
 // Save PageSpeed API key (nonce-protected).
 add_action('admin_post_deheled_save_key', function () {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
@@ -350,6 +369,19 @@ function deheled_render_panel() {
       </p>
 
       <div id="deheled-grid" class="deheled-grid"></div>
+
+      <?php $license_set = (bool) get_option(DEHELED_LICENSE_OPTION, ''); ?>
+      <div class="deheled-license <?php echo $license_set ? 'ok' : 'warn'; ?>">
+        <h2>Monitoring license <?php echo $license_set ? '· connected ✓' : '· not connected'; ?></h2>
+        <p class="description">Paste the license key from your Digital Elements dashboard. That's all this plugin needs — no <code>wp-config.php</code> changes.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+          <?php wp_nonce_field('deheled_save_license'); ?>
+          <input type="hidden" name="action" value="deheled_save_license" />
+          <input type="text" name="license_key" class="regular-text code" placeholder="DEG-XXXXX-XXXXX-XXXXX-XXXXX"
+                 value="<?php echo esc_attr(get_option(DEHELED_LICENSE_OPTION, '')); ?>" />
+          <button class="button button-primary">Save license</button>
+        </form>
+      </div>
 
       <details class="deheled-settings">
         <summary>PageSpeed API key <?php echo $key_set ? '· set ✓' : '· not set'; ?></summary>
@@ -387,6 +419,11 @@ function deheled_render_panel() {
       .deheled-card li .ver { color:#b8860b; }
       .deheled-empty { color:#646970; padding:30px 0; }
       .deheled-settings { margin-top:26px; max-width:640px; }
+      .deheled-license { margin-top:24px; max-width:640px; background:#fff; border:1px solid #dcdcde; border-left-width:4px; border-radius:8px; padding:16px 18px; }
+      .deheled-license.ok { border-left-color:#22c55e; }
+      .deheled-license.warn { border-left-color:#f5b945; }
+      .deheled-license h2 { margin:0 0 4px; font-size:15px; }
+      .deheled-license form { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
       .deheled-settings summary { cursor:pointer; color:#2271b1; }
       #deheled-run.busy { opacity:.7; pointer-events:none; }
     </style>

@@ -5,12 +5,27 @@
 import pg from "pg";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
 const { Pool } = pg;
+
+// A readable per-site license key, e.g. DEG-3F9A2-88C1D-4E0BB-7A6F2
+export function generateLicenseKey() {
+  const raw = crypto.randomBytes(10).toString("hex").toUpperCase();
+  return "DEG-" + raw.match(/.{1,5}/g).join("-");
+}
+// Duration code -> expiry timestamp. "none" means never expires.
+export function durationToExpiry(dur) {
+  if (dur === "none") return null;
+  const months = { "3m": 3, "6m": 6, "1y": 12 }[dur] || 12;
+  const d = new Date();
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString();
+}
 
 let pool = null;
 
@@ -35,14 +50,22 @@ export function query(text, params) {
 // ---- Row -> runner shape --------------------------------------------------
 // The checks/runner expect: { id, name, url, helper:{...}, expect:{...}, clickup:{...} }
 function rowToSite(r) {
+  const exp = r.license_expires_at ? new Date(r.license_expires_at) : null;
+  const derivedEndpoint = r.url ? r.url.replace(/\/+$/, "") + "/wp-json/wpmonitor/v1/status" : undefined;
   return {
     id: r.id,
     name: r.name,
     url: r.url,
     helper: {
       enabled: r.helper_enabled,
-      endpoint: r.helper_endpoint || undefined,
-      token: r.helper_token || undefined,
+      endpoint: r.helper_endpoint || derivedEndpoint,
+      token: r.license_key || r.helper_token || undefined, // license key is the auth token
+    },
+    license: {
+      key: r.license_key || null,
+      expiresAt: r.license_expires_at || null,
+      expired: exp ? exp.getTime() < Date.now() : false,
+      daysLeft: exp ? Math.ceil((exp.getTime() - Date.now()) / 86400000) : null,
     },
     expect: {
       cloudflare: r.expect_cloudflare,
@@ -75,21 +98,41 @@ export async function getWebsiteSite(id) {
 }
 
 export async function createWebsite(d, userId) {
+  const licenseKey = generateLicenseKey();
+  const expiresAt = durationToExpiry(d.license_duration || "1y");
   const { rows } = await query(
     `insert into websites
       (name,url,helper_enabled,helper_endpoint,helper_token,
        expect_cloudflare,expect_ctm,expect_google_tag,
-       clickup_enabled,clickup_list_ids,clickup_folder_id,clickup_space_id,created_by)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       clickup_enabled,clickup_list_ids,clickup_folder_id,clickup_space_id,created_by,
+       license_key,license_expires_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      returning *`,
     [
       d.name, d.url, !!d.helper_enabled, d.helper_endpoint || null, d.helper_token || null,
       d.expect_cloudflare !== false, d.expect_ctm !== false, d.expect_google_tag !== false,
       !!d.clickup_enabled, d.clickup_list_ids || [], d.clickup_folder_id || null, d.clickup_space_id || null,
-      userId || null,
+      userId || null, licenseKey, expiresAt,
     ]
   );
   return rowToSite(rows[0]);
+}
+
+// Issue a fresh key (invalidates the old one) and reset the expiry window.
+export async function regenerateLicense(id, duration) {
+  const { rows } = await query(
+    "update websites set license_key=$2, license_expires_at=$3, updated_at=now() where id=$1 returning *",
+    [id, generateLicenseKey(), durationToExpiry(duration || "1y")]
+  );
+  return rows[0] ? rowToSite(rows[0]) : null;
+}
+// Extend the expiry without changing the key (client keeps their key).
+export async function renewLicense(id, duration) {
+  const { rows } = await query(
+    "update websites set license_expires_at=$2, updated_at=now() where id=$1 returning *",
+    [id, durationToExpiry(duration || "1y")]
+  );
+  return rows[0] ? rowToSite(rows[0]) : null;
 }
 
 export async function updateWebsite(id, d) {
@@ -164,6 +207,19 @@ export async function deleteSocialLink(id) {
 export async function bootstrap() {
   // Ensure schema essentials exist (idempotent) in case SQL wasn't run.
   await query(`create extension if not exists "pgcrypto"`);
+
+  // Self-migrate: add per-site license columns if this DB predates them.
+  await query(`alter table websites add column if not exists license_key text`);
+  await query(`alter table websites add column if not exists license_expires_at timestamptz`);
+  await query(`create unique index if not exists websites_license_key_idx on websites(license_key)`);
+  const missing = await query("select id from websites where license_key is null");
+  for (const row of missing.rows) {
+    await query(
+      "update websites set license_key=$2, license_expires_at=coalesce(license_expires_at,$3) where id=$1",
+      [row.id, generateLicenseKey(), durationToExpiry("1y")]
+    );
+  }
+  if (missing.rows.length) console.log(`[db] Issued license keys for ${missing.rows.length} existing site(s).`);
 
   // Seed admin emails from env so someone can log in the first time.
   const admins = (process.env.ADMIN_EMAILS || "")

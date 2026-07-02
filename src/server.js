@@ -12,6 +12,7 @@ import { runOnce, startScheduler, isCheckRunning } from "./scheduler.js";
 import { getClickUpTasks } from "./checks/clickup.js";
 import {
   bootstrap, getWebsites, getWebsiteSite, createWebsite, updateWebsite, deleteWebsite,
+  regenerateLicense, renewLicense,
   listUsers, createUser, updateUserRole, deleteUser,
   getSocialLinks, addSocialLink, deleteSocialLink,
 } from "./db.js";
@@ -79,7 +80,14 @@ app.get("/api/tasks/:siteId", requireAuth, async (req, res) => {
 
 // ---- Websites (view: all; add/edit: manageWebsites; delete: deleteWebsite) ----
 app.get("/api/websites", requireAuth, async (req, res) => {
-  try { res.json({ ok: true, websites: await getWebsites() }); }
+  try {
+    const websites = await getWebsites();
+    // Only users who manage websites see the raw license key.
+    if (!permsFor(req.user.role).manageWebsites) {
+      websites.forEach((w) => { if (w.license) w.license = { ...w.license, key: null }; });
+    }
+    res.json({ ok: true, websites });
+  }
   catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
@@ -99,6 +107,7 @@ function normalizeWebsite(b) {
     clickup_list_ids: listIds,
     clickup_folder_id: b.clickup_folder_id || null,
     clickup_space_id: b.clickup_space_id || null,
+    license_duration: b.license_duration || "1y",
   };
 }
 
@@ -126,6 +135,19 @@ app.put("/api/websites/:id", requireAuth, requirePerm("manageWebsites"), async (
 app.delete("/api/websites/:id", requireAuth, requirePerm("deleteWebsite"), async (req, res) => {
   try { await deleteWebsite(req.params.id); console.log(`[websites] deleted ${req.params.id}`); res.json({ ok: true }); }
   catch (err) { console.error("[websites] delete failed:", err.message); res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// Regenerate (new key) or renew (extend expiry) a site's monitoring license.
+app.post("/api/websites/:id/license", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
+  const { action, duration } = req.body;
+  try {
+    const website = action === "regenerate"
+      ? await regenerateLicense(req.params.id, duration)
+      : await renewLicense(req.params.id, duration);
+    if (!website) return res.status(404).json({ ok: false, error: "Not found" });
+    console.log(`[websites] license ${action} for ${req.params.id}`);
+    res.json({ ok: true, website });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ---- Users (admin only) ----

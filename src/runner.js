@@ -42,10 +42,15 @@ async function checkOneSite(site, settings) {
   const expect = site.expect || {};
   const fetchResult = await fetchSite(site.url);
 
+  const licenseExpired = site.helper && site.helper.enabled && site.license && site.license.expired;
+  const pluginsPromise = licenseExpired
+    ? Promise.resolve({ status: "warn", label: "License expired", detail: "Renew this site's monitoring license to resume update checks." })
+    : checkPlugins(site.helper);
+
   const [ssl, pagespeed, plugins, clickup] = await Promise.all([
     checkSsl(site.url, settings.sslWarnDays),
     getPageSpeedCached(fetchResult.finalUrl || site.url, settings),
-    checkPlugins(site.helper),
+    pluginsPromise,
     checkClickUp(site.clickup, settings.clickup),
   ]);
 

@@ -33,6 +33,8 @@ create table if not exists websites (
   clickup_list_ids  text[] not null default '{}',
   clickup_folder_id text,
   clickup_space_id  text,
+  license_key       text unique,
+  license_expires_at timestamptz,
   created_by        uuid references app_users(id) on delete set null,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now()

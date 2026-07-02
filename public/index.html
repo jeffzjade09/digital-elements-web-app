@@ -202,6 +202,16 @@
   .btn-primary { background: var(--accent); color: #fff; border: 0; border-radius: 9px; padding: 10px 17px; font-weight: 600; cursor: pointer; font-size: 13px; }
   .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 9px; padding: 10px 17px; cursor: pointer; font-size: 13px; }
   .err { background: color-mix(in srgb, var(--fail) 12%, transparent); border: 1px solid color-mix(in srgb, var(--fail) 40%, transparent); color: #ffb4ae; font-size: 13px; border-radius: 9px; padding: 10px 13px; }
+  .lic-block { background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: 14px; }
+  .lic-lbl { display: block; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px; }
+  .lic-key { display: flex; gap: 8px; }
+  .lic-key input { flex: 1; font-family: var(--mono); letter-spacing: 0.04em; background: var(--inset); border: 1px solid var(--line); border-radius: 9px; color: var(--text); padding: 10px 12px; font-size: 13px; }
+  .lic-status { font-size: 12.5px; margin-top: 9px; }
+  .lic-ok { color: var(--ok); } .lic-warn { color: var(--warn); } .lic-bad { color: var(--fail); }
+  .lic-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+  .lic-actions select { background: var(--inset); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+  .lic-note { background: color-mix(in srgb, var(--ok) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 38%, transparent); color: #bff3dc; font-size: 12.5px; border-radius: 9px; padding: 9px 12px; margin-bottom: 12px; }
+  .saved-flash { color: var(--ok); font-size: 12px; margin-left: 8px; }
   .urow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
   .urow:first-child { border-top: 0; }
   .urow .uinfo small { display: block; color: var(--muted); font-family: var(--mono); font-size: 11px; }
@@ -476,6 +486,7 @@ function renderWebsitesList() {
 function incompleteReasons(w) {
   const r = [];
   if (!w.helper || !w.helper.enabled) r.push("Updates not set up (no helper plugin)");
+  else if (w.license && w.license.expired) r.push("Monitoring license expired");
   else if (!w.helper.endpoint || !w.helper.token) r.push("Helper endpoint or token missing");
   if (w.clickup && w.clickup.enabled && (!w.clickup.listIds || !w.clickup.listIds.length)) r.push("ClickUp enabled but no List IDs");
   return r;
@@ -534,11 +545,43 @@ function openWebsiteModal(site) {
   g("f-ctm").checked = site ? site.expect.ctm !== false : true;
   g("f-gt").checked = site ? site.expect.googleTag !== false : true;
   g("f-hep").value = site && site.helper ? (site.helper.endpoint || "") : "";
-  g("f-htok").value = site && site.helper ? (site.helper.token || "") : "";
   g("f-he").checked = site ? !!(site.helper && site.helper.enabled) : false;
+  const editing = !!(site && site.id);
+  g("licNew").style.display = editing ? "none" : "block";
+  g("licExisting").style.display = editing ? "block" : "none";
+  g("licNote").style.display = "none";
+  if (editing && site.license) {
+    g("f-lickey").value = site.license.key || "(hidden \u2014 needs manage permission)";
+    g("licStatus").innerHTML = licenseStatusHtml(site.license);
+  }
   g("siteModalErr").style.display = "none";
   g("siteModal").classList.add("show");
   document.body.style.overflow = "hidden";
+}
+function licenseStatusHtml(lic) {
+  if (!lic || !lic.expiresAt) return '<span class="lic-ok">Active \u00b7 no expiry</span>';
+  const d = new Date(lic.expiresAt).toLocaleDateString();
+  if (lic.expired) return `<span class="lic-bad">Expired on ${d} \u2014 renew to resume update checks</span>`;
+  const soon = lic.daysLeft != null && lic.daysLeft <= 14;
+  return `<span class="${soon ? "lic-warn" : "lic-ok"}">Active \u00b7 expires ${d}${lic.daysLeft != null ? ` (${lic.daysLeft} day${lic.daysLeft === 1 ? "" : "s"} left)` : ""}</span>`;
+}
+function copyLicense() {
+  const v = document.getElementById("f-lickey").value;
+  navigator.clipboard.writeText(v).then(() => {
+    const b = document.getElementById("licCopyBtn"), t = b.textContent;
+    b.textContent = "Copied \u2713"; setTimeout(() => { b.textContent = t; }, 1200);
+  }).catch(() => {});
+}
+async function licenseRenew() { licenseAction("renew"); }
+async function licenseRegen() { if (confirm("Regenerate the key? The current key stops working until the client pastes in the new one.")) licenseAction("regenerate"); }
+async function licenseAction(action) {
+  const duration = document.getElementById("f-licdur2").value;
+  const res = await fetch("/api/websites/" + editingSiteId + "/license", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, duration }) });
+  const j = await res.json();
+  if (!j.ok) { alert(j.error || "Failed"); return; }
+  document.getElementById("f-lickey").value = j.website.license.key || "";
+  document.getElementById("licStatus").innerHTML = licenseStatusHtml(j.website.license);
+  refreshWebsites().then(() => render(latestData || { sites: {} }));
 }
 function closeWebsiteModal() { document.getElementById("siteModal").classList.remove("show"); document.body.style.overflow = ""; }
 async function refreshWebsites() {
@@ -558,11 +601,13 @@ async function editWebsite(id) {
 }
 async function saveWebsite() {
   const g = (id) => document.getElementById(id);
+  const creating = !editingSiteId;
   const body = {
     name: g("f-name").value, url: g("f-url").value,
     clickup_list_ids: g("f-lists").value, clickup_enabled: g("f-cu").checked,
     expect_cloudflare: g("f-cf").checked, expect_ctm: g("f-ctm").checked, expect_google_tag: g("f-gt").checked,
-    helper_endpoint: g("f-hep").value, helper_token: g("f-htok").value, helper_enabled: g("f-he").checked,
+    helper_endpoint: g("f-hep").value, helper_enabled: g("f-he").checked,
+    license_duration: g("f-licdur").value,
   };
   const btn = g("siteSaveBtn"); btn.disabled = true; btn.textContent = "Saving\u2026";
   try {
@@ -571,6 +616,7 @@ async function saveWebsite() {
     const j = await res.json();
     if (!j.ok) throw new Error(j.error || "Save failed");
     closeWebsiteModal(); afterMutation();
+    if (creating && j.website) { setTimeout(() => { openWebsiteModal(j.website); document.getElementById("licNote").style.display = "block"; }, 80); }
   } catch (e) { const err = g("siteModalErr"); err.style.display = "block"; err.textContent = e.message; }
   finally { btn.disabled = false; btn.textContent = "Save"; }
 }
@@ -593,7 +639,7 @@ async function renderUsers() {
   box.innerHTML = j.users.map((u) => {
     const opts = Object.keys(ROLE_LABELS).map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("");
     return `<div class="urow"><div class="uinfo">${esc(u.name || u.email)}<small>${esc(u.email)}</small></div>
-      <div style="display:flex;gap:8px;align-items:center"><select onchange="changeUserRole('${u.id}', this.value)">${opts}</select>
+      <div style="display:flex;gap:8px;align-items:center"><select onchange="changeUserRole('${u.id}', this.value, this)">${opts}</select>
       <button class="linkx" onclick="removeUser('${u.id}','${esc(u.email)}')">Remove</button></div></div>`;
   }).join("") || '<div class="empty">No users yet.</div>';
 }
@@ -605,10 +651,16 @@ async function addUser() {
   if (!j.ok) { err.style.display = "block"; err.textContent = j.error || "Failed"; return; }
   document.getElementById("nu-email").value = ""; renderUsers();
 }
-async function changeUserRole(id, role) {
+async function changeUserRole(id, role, sel) {
   const res = await fetch("/api/users/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role }) });
   const j = await res.json();
-  if (!j.ok) { alert(j.error || "Failed"); renderUsers(); }
+  if (!j.ok) { alert(j.error || "Failed"); renderUsers(); return; }
+  if (sel && sel.parentNode) {
+    const note = document.createElement("span");
+    note.className = "saved-flash"; note.textContent = "Saved \u2713";
+    sel.parentNode.appendChild(note);
+    setTimeout(() => note.remove(), 1400);
+  }
 }
 async function removeUser(id, email) {
   if (!confirm(`Remove ${email}? They lose access immediately.`)) return;
@@ -753,9 +805,29 @@ boot();
         <label class="chk"><input type="checkbox" id="f-ctm" checked /> Expect CTM</label>
         <label class="chk"><input type="checkbox" id="f-gt" checked /> Expect Google Tag</label>
       </div>
-      <div class="field"><label>Helper endpoint (optional)</label><input type="text" id="f-hep" placeholder="https://site.com/wp-json/wpmonitor/v1/status" /></div>
-      <div class="field"><label>Helper token (optional)</label><input type="text" id="f-htok" /></div>
-      <label class="chk"><input type="checkbox" id="f-he" /> Helper plugin installed (enable Updates)</label>
+      <label class="chk" style="margin-bottom:14px"><input type="checkbox" id="f-he" /> This site has the helper plugin installed (enables Updates)</label>
+
+      <div id="licBlock" class="lic-block">
+        <div id="licNew">
+          <label class="lic-lbl">Monitoring license duration</label>
+          <select id="f-licdur"><option value="3m">3 months</option><option value="6m">6 months</option><option value="1y" selected>1 year</option><option value="none">No expiry</option></select>
+          <div class="sub" style="margin-top:6px">A unique license key is generated on save. You'll copy it to the client to paste into the plugin.</div>
+        </div>
+        <div id="licExisting" style="display:none">
+          <div id="licNote" class="lic-note" style="display:none">Website added. Copy this license key and send it to the client to activate the plugin.</div>
+          <label class="lic-lbl">License key</label>
+          <div class="lic-key"><input id="f-lickey" readonly /><button type="button" class="btn sm" id="licCopyBtn" onclick="copyLicense()">Copy</button></div>
+          <div id="licStatus" class="lic-status"></div>
+          <div class="lic-actions">
+            <select id="f-licdur2"><option value="3m">3 months</option><option value="6m">6 months</option><option value="1y" selected>1 year</option><option value="none">No expiry</option></select>
+            <button type="button" class="btn sm" onclick="licenseRenew()">Extend expiry</button>
+            <button type="button" class="btn sm danger" onclick="licenseRegen()">Regenerate</button>
+          </div>
+          <div class="sub" style="margin-top:8px">Client pastes this into <b>WP Admin &rarr; Site Monitor &rarr; Monitoring license</b>. Regenerating stops the old key working.</div>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:14px"><label>Helper endpoint (optional &mdash; auto-detected from the URL)</label><input type="text" id="f-hep" placeholder="Only needed if WordPress lives in a subfolder" /></div>
       <div id="siteModalErr" class="err" style="display:none;margin-top:12px"></div>
     </div>
     <div class="modal-actions"><button class="btn-ghost" onclick="closeWebsiteModal()">Cancel</button><button class="btn-primary" id="siteSaveBtn" onclick="saveWebsite()">Save</button></div>
