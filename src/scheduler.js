@@ -2,10 +2,33 @@
 
 import { loadSites, loadResults, saveResults } from "./store.js";
 import { runAll, runLandingPages } from "./runner.js";
-import { getLandingPages } from "./db.js";
+import { getLandingPages, recordStatusEvent, recordMetricSample } from "./db.js";
 import { diffRuns, dispatchAlerts } from "./alerts.js";
 
 let isRunning = false;
+const lastSample = {}; // websiteId -> ts, throttles metric snapshots
+const METRIC_SAMPLE_MS = 30 * 60 * 1000; // one trend sample per site per 30 min
+
+// Persist status changes (for uptime + incident log) and periodic metric samples.
+async function recordHistory(previous, fresh) {
+  const prevSites = previous.sites || {};
+  for (const [id, r] of Object.entries(fresh.sites || {})) {
+    const from = prevSites[id] ? prevSites[id].overall : null;
+    if (from !== r.overall) {
+      await recordStatusEvent(id, from, r.overall).catch((e) => console.error("[history] event:", e.message));
+    }
+    if (!lastSample[id] || Date.now() - lastSample[id] >= METRIC_SAMPLE_MS) {
+      lastSample[id] = Date.now();
+      const c = r.checks || {};
+      await recordMetricSample(id, {
+        overall: r.overall,
+        pagespeed: c.pagespeed && typeof c.pagespeed.score === "number" ? c.pagespeed.score : null,
+        sslDays: c.ssl && typeof c.ssl.daysRemaining === "number" ? c.ssl.daysRemaining : null,
+        responseMs: c.https && typeof c.https.responseTimeMs === "number" ? c.https.responseTimeMs : null,
+      }).catch((e) => console.error("[history] sample:", e.message));
+    }
+  }
+}
 
 // Runs a full sweep, persists it, and alerts on any change vs. the prior run.
 export async function runOnce(settings, { alert = false } = {}) {
@@ -23,6 +46,7 @@ export async function runOnce(settings, { alert = false } = {}) {
       console.error("[scheduler] Landing page checks failed:", err.message);
     }
     saveResults(fresh);
+    recordHistory(previous, fresh).catch((err) => console.error("[history] failed:", err.message));
 
     if (alert) {
       const lines = diffRuns(previous, fresh);

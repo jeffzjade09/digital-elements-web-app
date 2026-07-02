@@ -245,6 +245,50 @@ export async function setAppSettings(obj) {
   }
 }
 
+// ---- History: status transitions + periodic metric samples ----------------
+export async function recordStatusEvent(websiteId, from, to) {
+  await query("insert into status_events (website_id, from_status, to_status) values ($1,$2,$3)", [websiteId, from || null, to || null]);
+}
+export async function recordMetricSample(websiteId, m) {
+  await query(
+    "insert into metric_samples (website_id, overall, pagespeed, ssl_days, response_ms) values ($1,$2,$3,$4,$5)",
+    [websiteId, m.overall || null, m.pagespeed ?? null, m.sslDays ?? null, m.responseMs ?? null]
+  );
+}
+export async function getStatusEvents(websiteId, limit = 25) {
+  const { rows } = await query(
+    "select from_status, to_status, at from status_events where website_id=$1 order by at desc limit $2",
+    [websiteId, limit]
+  );
+  return rows.map((r) => ({ from: r.from_status, to: r.to_status, at: r.at }));
+}
+export async function getMetricSamples(websiteId, days = 30) {
+  const startIso = new Date(Date.now() - days * 86400000).toISOString();
+  const { rows } = await query(
+    "select overall, pagespeed, ssl_days, response_ms, at from metric_samples where website_id=$1 and at >= $2 order by at asc",
+    [websiteId, startIso]
+  );
+  return rows.map((r) => ({ overall: r.overall, pagespeed: r.pagespeed, sslDays: r.ssl_days, responseMs: r.response_ms, at: r.at }));
+}
+// Percentage of the window the site was NOT failing, derived from status transitions.
+export async function computeUptime(websiteId, days = 30) {
+  const now = Date.now();
+  const start = now - days * 86400000;
+  const startIso = new Date(start).toISOString();
+  const before = await query("select to_status from status_events where website_id=$1 and at <= $2 order by at desc limit 1", [websiteId, startIso]);
+  const evs = await query("select to_status, extract(epoch from at)*1000 as ms from status_events where website_id=$1 and at > $2 order by at asc", [websiteId, startIso]);
+  if (!before.rows.length && !evs.rows.length) return null; // no data yet
+  let cur = before.rows[0]?.to_status || "ok";
+  let downtime = 0, cursor = start;
+  for (const e of evs.rows) {
+    const t = Number(e.ms);
+    if (cur === "fail") downtime += t - cursor;
+    cursor = t; cur = e.to_status;
+  }
+  if (cur === "fail") downtime += now - cursor;
+  return Math.round(Math.max(0, Math.min(100, (1 - downtime / (now - start)) * 100)) * 100) / 100;
+}
+
 // ---- Startup: bootstrap admins + migrate sites.json ------------------------
 export async function bootstrap() {
   // Ensure schema essentials exist (idempotent) in case SQL wasn't run.
@@ -273,6 +317,19 @@ export async function bootstrap() {
   await query(`create index if not exists landing_pages_website_idx on landing_pages(website_id)`);
   await query(`create table if not exists app_settings (
     key text primary key, value text, updated_at timestamptz not null default now())`);
+
+  await query(`create table if not exists status_events (
+    id uuid primary key default gen_random_uuid(),
+    website_id uuid not null references websites(id) on delete cascade,
+    from_status text, to_status text,
+    at timestamptz not null default now())`);
+  await query(`create index if not exists status_events_site_at_idx on status_events(website_id, at)`);
+  await query(`create table if not exists metric_samples (
+    id uuid primary key default gen_random_uuid(),
+    website_id uuid not null references websites(id) on delete cascade,
+    overall text, pagespeed int, ssl_days int, response_ms int,
+    at timestamptz not null default now())`);
+  await query(`create index if not exists metric_samples_site_at_idx on metric_samples(website_id, at)`);
 
   // Seed admin emails from env so someone can log in the first time.
   const admins = (process.env.ADMIN_EMAILS || "")

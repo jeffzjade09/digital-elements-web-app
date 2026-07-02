@@ -51,6 +51,27 @@ create table if not exists social_links (
 );
 create index if not exists social_links_website_idx on social_links(website_id);
 
+-- ---- History: status transitions + metric samples --------------------------
+create table if not exists status_events (
+  id          uuid primary key default gen_random_uuid(),
+  website_id  uuid not null references websites(id) on delete cascade,
+  from_status text,
+  to_status   text,
+  at          timestamptz not null default now()
+);
+create index if not exists status_events_site_at_idx on status_events(website_id, at);
+
+create table if not exists metric_samples (
+  id          uuid primary key default gen_random_uuid(),
+  website_id  uuid not null references websites(id) on delete cascade,
+  overall     text,
+  pagespeed   int,
+  ssl_days    int,
+  response_ms int,
+  at          timestamptz not null default now()
+);
+create index if not exists metric_samples_site_at_idx on metric_samples(website_id, at);
+
 -- ---- Session store (connect-pg-simple) -------------------------------------
 -- Auto-created by the app on first run, but included here for reference.
 create table if not exists "session" (

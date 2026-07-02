@@ -273,6 +273,17 @@
   .btn.icononly { padding: 9px; }
   .btn.icononly svg { width: 17px; height: 17px; }
   @media (max-width: 900px) { .lp-row { flex-wrap: wrap; } .lp-main { flex: 1 1 100%; } }
+
+  /* History panel */
+  .hist-top { display: flex; align-items: baseline; gap: 8px; }
+  .hist-up { font-family: var(--display); font-weight: 700; font-size: 22px; }
+  .hist-up-lbl { color: var(--muted); font-size: 12px; }
+  .hist-spark { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .hist-spark-lbl { color: var(--muted); font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .hist-list { list-style: none; margin: 12px 0 0; padding: 0; }
+  .hist-list li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 5px 0; border-top: 1px solid var(--line-soft); }
+  .hist-list li:first-child { border-top: 0; }
+  .hist-when { margin-left: auto; color: var(--muted); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -521,11 +532,11 @@ function detailFoot(s) {
   if (ME.perms.manageWebsites) btns += `<button class="btn sm" onclick="event.stopPropagation(); editWebsite('${s.id}')">Edit site</button>`;
   if (ME.perms.deleteWebsite) btns += `<button class="btn sm danger" onclick="event.stopPropagation(); deleteWebsite('${s.id}', '${esc((s.name || "").replace(/'/g, ""))}')">Delete site</button>`;
   const actions = btns ? `<div class="site-actions">${btns}</div>` : "";
-  return `<div class="detail-foot">${actions}<div class="social-box"><h4>Social links</h4><div id="social-${s.id}">\u2026</div></div></div>`;
+  return `<div class="detail-foot">${actions}<div class="social-box"><h4>Social links</h4><div id="social-${s.id}">\u2026</div></div><div class="social-box" style="margin-top:16px"><h4>History (30 days)</h4><div id="hist-${s.id}">\u2026</div></div></div>`;
 }
 function toggle(id) {
   if (openRows.has(id)) openRows.delete(id);
-  else { openRows.add(id); loadSocial(id); }
+  else { openRows.add(id); loadSocial(id); loadHistory(id); }
   const row = document.getElementById("row-" + id);
   if (row) row.classList.toggle("open");
 }
@@ -889,6 +900,47 @@ async function removeSocial(id, siteId) {
   const res = await fetch("/api/social/" + id, { method: "DELETE" });
   const j = await res.json();
   if (j.ok) loadSocial(siteId); else alert(j.error || "Failed");
+}
+
+// ---------- Per-site history ----------
+function relTime(iso) {
+  const d = new Date(iso), s = (Date.now() - d.getTime()) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  const days = Math.floor(s / 86400);
+  return days < 30 ? days + "d ago" : d.toLocaleDateString();
+}
+function sparkline(vals) {
+  if (!vals || vals.length < 2) return "";
+  const W = 150, H = 34, pad = 3;
+  const step = (W - pad * 2) / (vals.length - 1);
+  const pts = vals.map((v, i) => `${(pad + i * step).toFixed(1)},${(pad + (1 - v / 100) * (H - pad * 2)).toFixed(1)}`).join(" ");
+  const last = vals[vals.length - 1];
+  const col = last >= 90 ? "var(--ok)" : last >= 50 ? "var(--warn)" : "var(--fail)";
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><polyline fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" points="${pts}"/></svg>`;
+}
+async function loadHistory(siteId) {
+  const box = document.getElementById("hist-" + siteId);
+  if (!box) return;
+  try {
+    const res = await fetch("/api/history/" + siteId + "?days=30");
+    const j = await res.json();
+    if (!j.ok) { box.innerHTML = '<div class="sub" style="font-size:12px;color:var(--muted)">Could not load history.</div>'; return; }
+    const up = j.uptime == null ? "\u2014" : j.uptime + "%";
+    const events = (j.events || []).slice(0, 5);
+    const evHtml = events.length
+      ? '<ul class="hist-list">' + events.map((e) => {
+          const [c, t] = statusInfo(e.to);
+          const from = e.from ? statusInfo(e.from)[1] : "New";
+          return `<li><span class="dot ${c}"></span>${esc(from)} \u2192 ${esc(t)}<span class="hist-when">${relTime(e.at)}</span></li>`;
+        }).join("") + "</ul>"
+      : '<div class="sub" style="font-size:12px;color:var(--muted)">No status changes recorded yet.</div>';
+    const psVals = (j.samples || []).filter((s) => typeof s.pagespeed === "number").map((s) => s.pagespeed);
+    const spark = sparkline(psVals);
+    const sparkHtml = spark ? `<div class="hist-spark"><span class="hist-spark-lbl">PageSpeed</span>${spark}<span class="hist-spark-lbl">${psVals[psVals.length - 1]}</span></div>` : "";
+    box.innerHTML = `<div class="hist-top"><span class="hist-up">${up}</span><span class="hist-up-lbl">uptime · last 30 days</span></div>${sparkHtml}${evHtml}`;
+  } catch (e) { box.innerHTML = '<div class="sub" style="font-size:12px;color:var(--muted)">Could not load history.</div>'; }
 }
 
 // Social links inside the Edit website modal (mirrors the drawer, kept in sync).

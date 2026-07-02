@@ -17,6 +17,7 @@ import {
   getSocialLinks, addSocialLink, deleteSocialLink,
   getLandingPages, createLandingPage, updateLandingPage, deleteLandingPage,
   getAppSettings, setAppSettings,
+  getStatusEvents, getMetricSamples, computeUptime,
 } from "./db.js";
 import { configureAuth, requireAuth, requirePerm, sameOriginOnly, permsFor } from "./auth.js";
 
@@ -94,6 +95,19 @@ app.get("/api/my-tasks", requireAuth, async (req, res) => {
     }));
     const tasks = perSite.flat().sort((a, b) => (Number(b.overdue) - Number(a.overdue)) || ((a.dueMs || Infinity) - (b.dueMs || Infinity)));
     res.json({ ok: true, email, tasks });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// Per-site history: uptime %, recent status changes, and metric samples for trends.
+app.get("/api/history/:siteId", requireAuth, async (req, res) => {
+  const days = clamp(req.query.days || 30, 1, 90);
+  try {
+    const [events, samples, uptime] = await Promise.all([
+      getStatusEvents(req.params.siteId, 25),
+      getMetricSamples(req.params.siteId, days),
+      computeUptime(req.params.siteId, days),
+    ]);
+    res.json({ ok: true, days, uptime, events, samples });
   } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
