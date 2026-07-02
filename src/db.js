@@ -203,6 +203,48 @@ export async function deleteSocialLink(id) {
   await query("delete from social_links where id = $1", [id]);
 }
 
+// ---- Landing pages (monitored URLs under a website; no plugin needed) ------
+export async function getLandingPages() {
+  const { rows } = await query("select id, website_id, name, url from landing_pages order by name asc");
+  return rows.map((r) => ({ id: r.id, websiteId: r.website_id, name: r.name, url: r.url }));
+}
+export async function createLandingPage(websiteId, name, url, userId) {
+  const { rows } = await query(
+    "insert into landing_pages (website_id,name,url,created_by) values ($1,$2,$3,$4) returning id, website_id, name, url",
+    [websiteId, name, url, userId || null]
+  );
+  const r = rows[0];
+  return { id: r.id, websiteId: r.website_id, name: r.name, url: r.url };
+}
+export async function updateLandingPage(id, name, url) {
+  const { rows } = await query(
+    "update landing_pages set name=$2, url=$3 where id=$1 returning id, website_id, name, url",
+    [id, name, url]
+  );
+  if (!rows[0]) return null;
+  const r = rows[0];
+  return { id: r.id, websiteId: r.website_id, name: r.name, url: r.url };
+}
+export async function deleteLandingPage(id) {
+  await query("delete from landing_pages where id = $1", [id]);
+}
+
+// ---- App settings (dashboard-configurable, key/value) ----------------------
+export async function getAppSettings() {
+  const { rows } = await query("select key, value from app_settings");
+  const out = {};
+  for (const r of rows) out[r.key] = r.value;
+  return out;
+}
+export async function setAppSettings(obj) {
+  for (const key of Object.keys(obj)) {
+    await query(
+      "insert into app_settings (key,value,updated_at) values ($1,$2,now()) on conflict (key) do update set value=excluded.value, updated_at=now()",
+      [key, String(obj[key])]
+    );
+  }
+}
+
 // ---- Startup: bootstrap admins + migrate sites.json ------------------------
 export async function bootstrap() {
   // Ensure schema essentials exist (idempotent) in case SQL wasn't run.
@@ -220,6 +262,17 @@ export async function bootstrap() {
     );
   }
   if (missing.rows.length) console.log(`[db] Issued license keys for ${missing.rows.length} existing site(s).`);
+
+  // Self-migrate: landing pages + settings tables.
+  await query(`create table if not exists landing_pages (
+    id uuid primary key default gen_random_uuid(),
+    website_id uuid not null references websites(id) on delete cascade,
+    name text not null, url text not null,
+    created_by uuid references app_users(id) on delete set null,
+    created_at timestamptz not null default now())`);
+  await query(`create index if not exists landing_pages_website_idx on landing_pages(website_id)`);
+  await query(`create table if not exists app_settings (
+    key text primary key, value text, updated_at timestamptz not null default now())`);
 
   // Seed admin emails from env so someone can log in the first time.
   const admins = (process.env.ADMIN_EMAILS || "")

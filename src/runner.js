@@ -94,3 +94,39 @@ export async function runAll(sites, settings) {
   for (const r of results) byId[r.id] = r;
   return { lastRun: new Date().toISOString(), running: false, sites: byId };
 }
+
+// Landing pages get the URL-level checks only (no plugin/updates, no tasks).
+// Tracking checks are informational here (won't fail a landing page).
+async function checkOneLandingPage(lp, settings) {
+  const fetchResult = await fetchSite(lp.url);
+  const [ssl, pagespeed] = await Promise.all([
+    checkSsl(lp.url, settings.sslWarnDays),
+    getPageSpeedCached(fetchResult.finalUrl || lp.url, settings),
+  ]);
+  const checks = {
+    https: checkHttps(fetchResult),
+    ssl,
+    cloudflare: checkCloudflare(fetchResult, false),
+    ctm: checkCtm(fetchResult, false),
+    googleTag: checkGoogleTag(fetchResult, false),
+    pagespeed,
+  };
+  return {
+    id: lp.id, websiteId: lp.websiteId, name: lp.name || lp.url, url: lp.url,
+    checkedAt: new Date().toISOString(), overall: rollUp(checks), checks,
+  };
+}
+
+export async function runLandingPages(pages, settings) {
+  const results = await Promise.all(
+    pages.map((p) =>
+      checkOneLandingPage(p, settings).catch((err) => ({
+        id: p.id, websiteId: p.websiteId, name: p.name || p.url, url: p.url,
+        checkedAt: new Date().toISOString(), overall: "fail", error: err.message, checks: {},
+      }))
+    )
+  );
+  const byId = {};
+  for (const r of results) byId[r.id] = r;
+  return byId;
+}

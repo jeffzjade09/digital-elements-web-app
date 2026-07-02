@@ -11,11 +11,11 @@ import { getPool, getUserByEmail, getUserById, touchLogin } from "./db.js";
 
 // Permission model. Keep this as the single source of truth.
 const PERMISSIONS = {
-  admin:     { manageWebsites: true,  deleteWebsite: true,  manageUsers: true,  editSocial: true },
-  webdev:    { manageWebsites: true,  deleteWebsite: false, manageUsers: false, editSocial: true },
-  social:    { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: true },
-  seo:       { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: false },
-  publisher: { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: false },
+  admin:     { manageWebsites: true,  deleteWebsite: true,  manageUsers: true,  editSocial: true,  manageSettings: true },
+  webdev:    { manageWebsites: true,  deleteWebsite: false, manageUsers: false, editSocial: true,  manageSettings: false },
+  social:    { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: true,  manageSettings: false },
+  seo:       { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: false, manageSettings: false },
+  publisher: { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: false, manageSettings: false },
 };
 
 export function permsFor(role) {

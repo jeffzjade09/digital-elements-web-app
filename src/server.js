@@ -7,7 +7,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadSettings, loadResults } from "./store.js";
+import { loadSettings, loadResults, applyStoredSettings } from "./store.js";
 import { runOnce, startScheduler, isCheckRunning } from "./scheduler.js";
 import { getClickUpTasks } from "./checks/clickup.js";
 import {
@@ -15,6 +15,8 @@ import {
   regenerateLicense, renewLicense,
   listUsers, createUser, updateUserRole, deleteUser,
   getSocialLinks, addSocialLink, deleteSocialLink,
+  getLandingPages, createLandingPage, updateLandingPage, deleteLandingPage,
+  getAppSettings, setAppSettings,
 } from "./db.js";
 import { configureAuth, requireAuth, requirePerm, sameOriginOnly, permsFor } from "./auth.js";
 
@@ -200,9 +202,65 @@ app.delete("/api/social/:id", requireAuth, requirePerm("editSocial"), async (req
   catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
+// ---- Landing pages (view: all; add/edit/delete: manageWebsites) ----
+app.get("/api/landing", requireAuth, async (req, res) => {
+  try { res.json({ ok: true, pages: await getLandingPages() }); }
+  catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+app.post("/api/landing", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
+  const websiteId = req.body.website_id;
+  const name = (req.body.name || "").trim();
+  const url = (req.body.url || "").trim();
+  if (!websiteId || !name || !url) return res.status(400).json({ ok: false, error: "Website, name and URL are required" });
+  try { res.json({ ok: true, page: await createLandingPage(websiteId, name, url, req.user.id) }); }
+  catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+app.put("/api/landing/:id", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
+  const name = (req.body.name || "").trim();
+  const url = (req.body.url || "").trim();
+  if (!name || !url) return res.status(400).json({ ok: false, error: "Name and URL are required" });
+  try {
+    const page = await updateLandingPage(req.params.id, name, url);
+    if (!page) return res.status(404).json({ ok: false, error: "Not found" });
+    res.json({ ok: true, page });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+app.delete("/api/landing/:id", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
+  try { await deleteLandingPage(req.params.id); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// ---- Settings (admin only) ----
+function settingsView() {
+  return {
+    pagespeedIntervalSeconds: Math.round((settings.pageSpeed.minIntervalMs || 120000) / 1000),
+    sweepIntervalSeconds: settings.sweepIntervalSeconds || 60,
+    sslWarnDays: settings.sslWarnDays || 14,
+  };
+}
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n) || 0)));
+
+app.get("/api/settings", requireAuth, requirePerm("manageSettings"), (req, res) => {
+  res.json({ ok: true, settings: settingsView() });
+});
+app.put("/api/settings", requireAuth, requirePerm("manageSettings"), async (req, res) => {
+  const b = req.body || {};
+  const toStore = {};
+  if (b.pagespeedIntervalSeconds != null) toStore.pagespeed_interval_seconds = String(clamp(b.pagespeedIntervalSeconds, 60, 86400));
+  if (b.sweepIntervalSeconds != null) toStore.sweep_interval_seconds = String(clamp(b.sweepIntervalSeconds, 15, 3600));
+  if (b.sslWarnDays != null) toStore.ssl_warn_days = String(clamp(b.sslWarnDays, 1, 90));
+  try {
+    await setAppSettings(toStore);
+    applyStoredSettings(settings, toStore); // takes effect on the next sweep/tick
+    console.log("[settings] updated:", toStore);
+    res.json({ ok: true, settings: settingsView() });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
 // ---- Start ----
 bootstrap()
-  .then(() => {
+  .then(async () => {
+    try { applyStoredSettings(settings, await getAppSettings()); } catch (err) { console.error("[server] Could not load stored settings:", err.message); }
     app.listen(settings.port, () => {
       console.log(`\n  Digital Elements Site Monitor at ${settings.publicUrl}\n`);
       startScheduler(settings);

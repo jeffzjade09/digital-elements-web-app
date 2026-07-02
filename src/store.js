@@ -25,6 +25,15 @@ export async function loadSites() {
   return getWebsites();
 }
 
+// Overlay dashboard-configured settings (from the DB) onto the live settings
+// object so scheduler/runner pick them up without a restart.
+export function applyStoredSettings(settings, stored) {
+  if (!stored) return;
+  if (stored.pagespeed_interval_seconds) settings.pageSpeed.minIntervalMs = Number(stored.pagespeed_interval_seconds) * 1000;
+  if (stored.sweep_interval_seconds) settings.sweepIntervalSeconds = Number(stored.sweep_interval_seconds);
+  if (stored.ssl_warn_days) settings.sslWarnDays = Number(stored.ssl_warn_days);
+}
+
 export function loadSettings() {
   const num = (v, d) => (v === undefined || v === "" ? d : Number(v));
   const bool = (v, d) => (v === undefined ? d : String(v).toLowerCase() === "true");
