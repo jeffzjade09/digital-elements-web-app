@@ -80,6 +80,11 @@ function pluginVersion() {
 app.get("/api/plugin/manifest", (req, res) => {
   let lastUpdated = null;
   try { lastUpdated = fs.statSync(PLUGIN_ZIP).mtime.toISOString().slice(0, 10); } catch {}
+  let changelog = "";
+  try {
+    const md = fs.readFileSync(path.join(__dirname, "..", "wordpress-plugin", "digital-elements-helper", "CHANGELOG.md"), "utf8");
+    changelog = "<pre>" + md.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</pre>";
+  } catch {}
   res.json({
     name: "Digital Elements Helper Plugin",
     slug: "digital-elements-helper",
@@ -91,6 +96,7 @@ app.get("/api/plugin/manifest", (req, res) => {
     homepage: "https://digitalelementsgroup.com/",
     download_url: `${settings.publicUrl.replace(/\/$/, "")}/api/plugin/download`,
     description: "Connects this site to the Digital Elements monitoring dashboard.",
+    changelog,
   });
 });
 app.get("/api/plugin/download", (req, res) => {

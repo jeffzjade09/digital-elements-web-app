@@ -114,7 +114,7 @@ function deheled_render_panel() {
         <span>DE Monitoring</span>
         <button class="button button-primary" id="deheled-run">Run checks now</button>
       </h1>
-      <p class="deheled-sub">Digital Elements Group &middot; Health of <strong><?php echo esc_html(home_url()); ?></strong>.
+      <p class="deheled-sub">Digital Elements Group &middot; Helper v<?php echo esc_html(DEHELED_VERSION); ?> &middot; Health of <strong><?php echo esc_html(home_url()); ?></strong>.
         <span id="deheled-checked"><?php echo $cached ? 'Last checked ' . esc_html(date_i18n('M j, Y g:i a', strtotime($cached['checked_at']))) : 'No checks run yet.'; ?></span>
       </p>
 
