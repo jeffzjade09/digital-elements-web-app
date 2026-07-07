@@ -66,6 +66,29 @@ app.get("/api/license/validate", async (req, res) => {
     res.status(500).json({ ok: false, error: "lookup failed" });
   }
 });
+
+// History for the helper plugin, authenticated by license key (same trust
+// model as /api/license/validate — the key is the shared secret).
+app.get("/api/plugin/history", async (req, res) => {
+  const key = String(req.query.key || "").trim();
+  if (!/^DEG-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/i.test(key)) {
+    return res.status(403).json({ ok: false, error: "invalid key" });
+  }
+  try {
+    const lic = await getWebsiteByLicense(key);
+    if (!lic) return res.status(403).json({ ok: false, error: "invalid key" });
+    if (lic.expired) return res.status(403).json({ ok: false, error: "license expired" });
+    const days = Math.min(90, Math.max(1, Math.round(Number(req.query.days) || 30)));
+    const [events, samples, uptime] = await Promise.all([
+      getStatusEvents(lic.id, 10),
+      getMetricSamples(lic.id, days),
+      computeUptime(lic.id, days),
+    ]);
+    res.json({ ok: true, days, uptime, events, samples });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: "lookup failed" });
+  }
+});
 app.get("/login", (req, res) => res.sendFile(path.join(PUBLIC, "login.html")));
 app.get("/logo.png", (req, res) => res.sendFile(path.join(PUBLIC, "logo.png")));
 

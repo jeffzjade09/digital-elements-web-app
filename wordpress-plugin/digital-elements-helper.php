@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Digital Elements Helper Plugin
  * Description: Connects this site to the Digital Elements monitoring dashboard. Adds an admin panel showing HTTPS, SSL, Cloudflare, CTM, Google Tag, PageSpeed, and update status, plus a secure, read-only endpoint the central dashboard reads. It cannot modify the site, access content, or run updates.
- * Version:     1.4.1
+ * Version:     1.5
  * Author:      Digital Elements Group
  * Author URI:  https://digitalelementsgroup.com/
  * Plugin URI:  https://digitalelementsgroup.com/
@@ -29,7 +29,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('DEHELED_VERSION', '1.4.1');
+define('DEHELED_VERSION', '1.5');
 define('DEHELED_CACHE_KEY', 'deheled_status_cache');
 define('DEHELED_PSI_OPTION', 'deheled_psi_key');
 define('DEHELED_LICENSE_OPTION', 'deheled_license_key');
@@ -634,6 +634,27 @@ add_action('wp_ajax_deheled_scan', function () {
     wp_send_json_success(deheled_security_scan());
 });
 
+// AJAX: fetch this site's monitoring history from the dashboard (proxied
+// server-side so the license key never reaches the browser).
+add_action('wp_ajax_deheled_history', function () {
+    if (!current_user_can('manage_options')) wp_send_json_error('Forbidden', 403);
+    check_ajax_referer('deheled_run');
+    $key = get_option(DEHELED_LICENSE_OPTION, '');
+    if (!$key) wp_send_json_error('No license key saved', 400);
+    $days = isset($_POST['days']) ? max(1, min(90, intval($_POST['days']))) : 30;
+    $res = wp_remote_get(
+        DEHELED_HUB_URL . '/api/plugin/history?key=' . rawurlencode($key) . '&days=' . $days,
+        array('timeout' => 10)
+    );
+    if (is_wp_error($res)) wp_send_json_error('Could not reach the dashboard', 502);
+    $code = wp_remote_retrieve_response_code($res);
+    $body = json_decode(wp_remote_retrieve_body($res), true);
+    if ($code !== 200 || empty($body['ok'])) {
+        wp_send_json_error(isset($body['error']) ? $body['error'] : 'History unavailable', 502);
+    }
+    wp_send_json_success($body);
+});
+
 function deheled_render_panel() {
     $cached  = get_transient(DEHELED_CACHE_KEY);
     $nonce   = wp_create_nonce('deheled_run');
@@ -661,6 +682,21 @@ function deheled_render_panel() {
         </h2>
         <p class="description">Read-only server-side scan for injected code, PHP in uploads, modified core files, and new admin accounts. Findings also appear in your Digital Elements dashboard.</p>
         <div id="deheled-sec-body"></div>
+      </div>
+
+      <div class="deheled-history" id="deheled-hist-wrap">
+        <h2 style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">History &amp; trends
+          <span class="deheled-ranges">
+            <button class="button deheled-range" data-days="7">7d</button>
+            <button class="button deheled-range is-on" data-days="30">30d</button>
+            <button class="button deheled-range" data-days="90">90d</button>
+          </span>
+          <span id="deheled-hist-up" class="deheled-uptime"></span>
+        </h2>
+        <p class="description">Uptime, PageSpeed, response time and SSL trends recorded by the Digital Elements dashboard.</p>
+        <div id="deheled-hist-charts" class="deheled-hcharts"></div>
+        <ul id="deheled-hist-events" class="deheled-hevents"></ul>
+        <p id="deheled-hist-msg" class="description" style="display:none"></p>
       </div>
 
       <?php
@@ -776,6 +812,19 @@ function deheled_render_panel() {
       .deheled-sec-sev.med  { background:#fef3cd; color:#92660a; }
       .deheled-sec-file { color:#646970; font-family:Menlo,Consolas,monospace; font-size:12px; }
       .deheled-sec-clean { color:#137333; font-weight:600; padding:10px 0; }
+      .deheled-history { margin-top:26px; max-width:860px; background:#fff; border:1px solid #dcdcde; border-radius:8px; padding:16px 18px; }
+      .deheled-history h2 { margin:0 0 4px; font-size:15px; }
+      .deheled-ranges .deheled-range.is-on { border-color:#2271b1; color:#2271b1; font-weight:600; }
+      .deheled-uptime { margin-left:auto; font-weight:700; font-size:15px; color:#1d2327; }
+      .deheled-hcharts { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin:14px 0 4px; }
+      .deheled-hchart { border:1px solid #e2e4e7; border-radius:8px; padding:10px 12px; background:#fafafa; }
+      .deheled-hchart-head { display:flex; justify-content:space-between; align-items:baseline; font-size:11px; color:#646970; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px; }
+      .deheled-hchart-head strong { color:#1d2327; font-size:13px; }
+      .deheled-hevents { margin:10px 0 0; padding:0; list-style:none; }
+      .deheled-hevents li { display:flex; align-items:center; gap:8px; font-size:12.5px; padding:6px 0; border-top:1px solid #f0f0f1; }
+      .deheled-hevents li:first-child { border-top:0; }
+      .deheled-hdot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+      .deheled-hwhen { margin-left:auto; color:#8c8f94; font-size:11px; }
     </style>
 
     <script>
@@ -851,6 +900,79 @@ function deheled_render_panel() {
       }
       secBtn.addEventListener("click", scan);
       renderSec(secData);
+
+      // ---- History & trends ----
+      var histDays = 30;
+      function downsample(vals, target){
+        if(vals.length <= target) return vals;
+        var out = [], b = vals.length / target;
+        for(var i=0;i<target;i++){
+          var s = vals.slice(Math.floor(i*b), Math.floor((i+1)*b) || Math.floor(i*b)+1);
+          out.push(s.reduce(function(a,x){return a+x;},0)/s.length);
+        }
+        return out;
+      }
+      function lineSvg(raw, color, zeroBase){
+        var vals = downsample(raw, 120);
+        if(vals.length < 2) return "";
+        var W=260,H=46,pad=4;
+        var min=Math.min.apply(null,vals), max=Math.max.apply(null,vals);
+        if(zeroBase) min=Math.min(min,0);
+        if(min===max){min-=1;max+=1;}
+        var step=(W-pad*2)/(vals.length-1);
+        var pts=vals.map(function(v,i){return (pad+i*step).toFixed(1)+","+(pad+(1-(v-min)/(max-min))*(H-pad*2)).toFixed(1);}).join(" ");
+        return '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" width="100%" height="'+H+'"><polyline fill="none" stroke="'+color+'" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" points="'+pts+'"/></svg>';
+      }
+      function relTime(iso){
+        var s=(Date.now()-new Date(iso).getTime())/1000;
+        if(s<60) return "just now";
+        if(s<3600) return Math.floor(s/60)+"m ago";
+        if(s<86400) return Math.floor(s/3600)+"h ago";
+        var d=Math.floor(s/86400);
+        return d<30 ? d+"d ago" : new Date(iso).toLocaleDateString();
+      }
+      var HLBL = { ok:["#22c55e","Operational"], warn:["#f59e0b","Warning"], fail:["#ef4444","Failing"], skip:["#8c8f94","Pending"] };
+      function renderHist(d){
+        var up = document.getElementById("deheled-hist-up");
+        up.textContent = (d.uptime==null ? "\u2014" : d.uptime+"%") + " uptime \u00b7 " + d.days + " days";
+        var S = d.samples || [];
+        var pick = function(k){ return S.filter(function(s){return typeof s[k]==="number";}).map(function(s){return s[k];}); };
+        var ps = pick("pagespeed"), rt = pick("responseMs"), ssl = pick("sslDays");
+        var psColor = ps.length ? (ps[ps.length-1]>=90 ? "#22c55e" : ps[ps.length-1]>=50 ? "#f59e0b" : "#ef4444") : "#2271b1";
+        function card(label, vals, color, zero, fmt){
+          if(vals.length < 2) return "";
+          return '<div class="deheled-hchart"><div class="deheled-hchart-head"><span>'+label+'</span><strong>'+fmt(vals[vals.length-1])+'</strong></div>'+lineSvg(vals,color,zero)+'</div>';
+        }
+        var charts =
+          card("PageSpeed", ps, psColor, false, function(v){return Math.round(v);}) +
+          card("Response time", rt, "#2271b1", true, function(v){return Math.round(v)+"ms";}) +
+          card("SSL days left", ssl, "#6366f1", true, function(v){return Math.round(v)+"d";});
+        document.getElementById("deheled-hist-charts").innerHTML =
+          charts || '<p class="description">Trends appear once the dashboard has collected a few samples.</p>';
+        var ev = (d.events||[]).slice(0,6).map(function(e){
+          var to=HLBL[e.to]||HLBL.skip, from=e.from?(HLBL[e.from]||HLBL.skip)[1]:"New";
+          return '<li><span class="deheled-hdot" style="background:'+to[0]+'"></span>'+esc(from)+' \u2192 '+esc(to[1])+'<span class="deheled-hwhen">'+relTime(e.at)+'</span></li>';
+        }).join("");
+        document.getElementById("deheled-hist-events").innerHTML = ev;
+      }
+      function loadHist(days){
+        histDays = days;
+        var msg = document.getElementById("deheled-hist-msg");
+        msg.style.display = "none";
+        document.querySelectorAll(".deheled-range").forEach(function(b){ b.classList.toggle("is-on", parseInt(b.dataset.days,10)===days); });
+        var body = new URLSearchParams({ action:"deheled_history", days:String(days), _ajax_nonce:"<?php echo esc_js($nonce); ?>" });
+        fetch(ajaxurl, { method:"POST", credentials:"same-origin", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: body })
+          .then(function(r){ return r.json(); })
+          .then(function(j){
+            if(j && j.success){ renderHist(j.data); }
+            else { msg.textContent = (j && j.data ? j.data : "History unavailable") + " \u2014 make sure the monitoring license is active."; msg.style.display = ""; }
+          })
+          .catch(function(){ msg.textContent = "Could not load history."; msg.style.display = ""; });
+      }
+      document.querySelectorAll(".deheled-range").forEach(function(b){
+        b.addEventListener("click", function(){ loadHist(parseInt(b.dataset.days,10)); });
+      });
+      loadHist(30);
 
       // ---- License field lock/unlock ----
       var licChange = document.getElementById("deheled-lic-change");

@@ -290,12 +290,12 @@ export async function computeUptime(websiteId, days = 30) {
 }
 // License validation lookup (used by the helper plugin's public check).
 export async function getWebsiteByLicense(key) {
-  const { rows } = await query("select name, license_expires_at from websites where license_key = $1", [key]);
+  const { rows } = await query("select id, name, license_expires_at from websites where license_key = $1", [key]);
   if (!rows[0]) return null;
   const exp = rows[0].license_expires_at ? new Date(rows[0].license_expires_at) : null;
   const expired = exp ? exp.getTime() < Date.now() : false;
   const daysLeft = exp ? Math.ceil((exp.getTime() - Date.now()) / 86400000) : null;
-  return { name: rows[0].name, expiresAt: exp ? exp.toISOString() : null, expired, daysLeft };
+  return { id: rows[0].id, name: rows[0].name, expiresAt: exp ? exp.toISOString() : null, expired, daysLeft };
 }
 
 // Retention: prune trend samples older than N days. status_events are tiny and
