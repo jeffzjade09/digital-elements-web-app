@@ -5,6 +5,7 @@
 import "dotenv/config";
 import express from "express";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { loadSettings, loadResults, applyStoredSettings } from "./store.js";
@@ -65,6 +66,37 @@ app.get("/api/license/validate", async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: "lookup failed" });
   }
+});
+
+// Plugin self-update: version manifest + zip download for the helper plugin.
+const PLUGIN_MAIN = path.join(__dirname, "..", "wordpress-plugin", "digital-elements-helper", "digital-elements-helper.php");
+const PLUGIN_ZIP = path.join(__dirname, "..", "wordpress-plugin", "dist", "digital-elements-helper.zip");
+function pluginVersion() {
+  try {
+    const m = fs.readFileSync(PLUGIN_MAIN, "utf8").match(/^\s*\*\s*Version:\s*([0-9][\w.\-]*)/m);
+    return m ? m[1] : "0";
+  } catch { return "0"; }
+}
+app.get("/api/plugin/manifest", (req, res) => {
+  let lastUpdated = null;
+  try { lastUpdated = fs.statSync(PLUGIN_ZIP).mtime.toISOString().slice(0, 10); } catch {}
+  res.json({
+    name: "Digital Elements Helper Plugin",
+    slug: "digital-elements-helper",
+    version: pluginVersion(),
+    requires: "5.8",
+    requires_php: "7.4",
+    tested: "7.0",
+    last_updated: lastUpdated,
+    homepage: "https://digitalelementsgroup.com/",
+    download_url: `${settings.publicUrl.replace(/\/$/, "")}/api/plugin/download`,
+    description: "Connects this site to the Digital Elements monitoring dashboard.",
+  });
+});
+app.get("/api/plugin/download", (req, res) => {
+  res.download(PLUGIN_ZIP, "digital-elements-helper.zip", (err) => {
+    if (err && !res.headersSent) res.status(404).json({ ok: false, error: "package not found" });
+  });
 });
 
 // History for the helper plugin, authenticated by license key (same trust
