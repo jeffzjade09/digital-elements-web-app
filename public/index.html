@@ -497,7 +497,7 @@
             <div class="hint">How often the (slow, rate-limited) PageSpeed score is refreshed per site. The other checks run on the frequency below.</div>
             <div class="set-inline">
               <input type="number" id="set-ps-val" min="1" />
-              <select id="set-ps-unit"><option value="minutes">minutes</option><option value="hours">hours</option></select>
+              <select id="set-ps-unit"><option value="minutes">minutes</option><option value="hours">hours</option><option value="days">days</option></select>
             </div>
           </div>
           <div class="set-field">
@@ -1160,7 +1160,8 @@ async function renderSettings() {
   if (!j.ok) return;
   const s = j.settings;
   const ps = s.pagespeedIntervalSeconds;
-  if (ps % 3600 === 0 && ps >= 3600) { document.getElementById("set-ps-val").value = ps / 3600; document.getElementById("set-ps-unit").value = "hours"; }
+  if (ps % 86400 === 0 && ps >= 86400) { document.getElementById("set-ps-val").value = ps / 86400; document.getElementById("set-ps-unit").value = "days"; }
+  else if (ps % 3600 === 0 && ps >= 3600) { document.getElementById("set-ps-val").value = ps / 3600; document.getElementById("set-ps-unit").value = "hours"; }
   else { document.getElementById("set-ps-val").value = Math.round(ps / 60); document.getElementById("set-ps-unit").value = "minutes"; }
   const sweepSel = document.getElementById("set-sweep");
   sweepSel.value = String(s.sweepIntervalSeconds);
@@ -1173,7 +1174,7 @@ async function saveSettings() {
   const val = Number(document.getElementById("set-ps-val").value) || 1;
   const unit = document.getElementById("set-ps-unit").value;
   const body = {
-    pagespeedIntervalSeconds: val * (unit === "hours" ? 3600 : 60),
+    pagespeedIntervalSeconds: val * (unit === "days" ? 86400 : unit === "hours" ? 3600 : 60),
     sweepIntervalSeconds: Number(document.getElementById("set-sweep").value),
     sslWarnDays: Number(document.getElementById("set-ssl").value),
     historyRetentionDays: Number(document.getElementById("set-retention").value),

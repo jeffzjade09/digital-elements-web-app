@@ -381,7 +381,7 @@ app.get("/api/settings", requireAuth, requirePerm("manageSettings"), (req, res) 
 app.put("/api/settings", requireAuth, requirePerm("manageSettings"), async (req, res) => {
   const b = req.body || {};
   const toStore = {};
-  if (b.pagespeedIntervalSeconds != null) toStore.pagespeed_interval_seconds = String(clamp(b.pagespeedIntervalSeconds, 60, 86400));
+  if (b.pagespeedIntervalSeconds != null) toStore.pagespeed_interval_seconds = String(clamp(b.pagespeedIntervalSeconds, 60, 604800)); // up to 7 days
   if (b.sweepIntervalSeconds != null) toStore.sweep_interval_seconds = String(clamp(b.sweepIntervalSeconds, 15, 3600));
   if (b.sslWarnDays != null) toStore.ssl_warn_days = String(clamp(b.sslWarnDays, 1, 90));
   if (b.historyRetentionDays != null) {
