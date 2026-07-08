@@ -289,6 +289,95 @@
   .hist-list li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 5px 0; border-top: 1px solid var(--line-soft); }
   .hist-list li:first-child { border-top: 0; }
   .hist-when { margin-left: auto; color: var(--muted); font-size: 11px; }
+  /* ---------- Website detail page ---------- */
+  .sd-back { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 13px; cursor: pointer; text-decoration: none; margin-bottom: 12px; background: none; border: 0; padding: 0; font-family: var(--body); }
+  .sd-back:hover { color: var(--text); }
+  .sd-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .sd-head h1 { font-family: var(--display); font-weight: 700; font-size: 26px; letter-spacing: -0.01em; margin: 0 0 5px; }
+  .sd-url { color: var(--accent); font-size: 13px; text-decoration: none; }
+  .sd-url:hover { text-decoration: underline; }
+  .sd-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sd-checked { color: var(--muted); font-size: 12px; }
+  .sd-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(152px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .sdc { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 12px; padding: 14px; min-width: 0; }
+  .sdc .t { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .sdc .t .ci { width: 15px; height: 15px; flex: none; }
+  .sdc .v { font-family: var(--display); font-weight: 700; font-size: 19px; margin-top: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sdc .v small { font-size: 12px; font-weight: 500; color: var(--muted); }
+  .sdc .s { color: var(--muted); font-size: 11.5px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sdc.ok .v { color: var(--ok); } .sdc.warn .v { color: var(--warn); } .sdc.fail .v { color: var(--fail); } .sdc.skip .v { color: var(--faint); }
+  .sd-grid { display: grid; gap: 16px; margin-bottom: 16px; }
+  .sd-grid.g3 { grid-template-columns: 1.1fr 1.45fr 1.45fr; }
+  .sd-grid.g3b { grid-template-columns: repeat(3, 1fr); }
+  .sd-grid.g21 { grid-template-columns: 2fr 1fr; }
+  .sdp { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 18px; min-width: 0; }
+  .sdp h3 { margin: 0 0 14px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 9px; }
+  .sdp h3 .ci { width: 16px; height: 16px; color: var(--accent); }
+  .sdp h3 .count-pill { margin-left: auto; background: var(--panel-2); color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 2px 9px; border-radius: 12px; }
+  .sdp h3 .count-pill.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+  .sdp .empty-sm { color: var(--muted); font-size: 12.5px; padding: 18px 0; text-align: center; }
+  /* Health gauge */
+  .gauge-wrap { display: flex; gap: 20px; align-items: center; }
+  .gauge { position: relative; width: 128px; height: 128px; flex: none; }
+  .gauge svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .gauge .gn { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .gauge .gn b { font-family: var(--display); font-size: 32px; font-weight: 700; line-height: 1; }
+  .gauge .gn span { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .gauge.sm { width: 96px; height: 96px; }
+  .gauge.sm .gn b { font-size: 24px; }
+  .score-rows { flex: 1; min-width: 0; }
+  .score-row { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 5.5px 0; }
+  .score-row .sk { width: 84px; color: var(--muted); flex: none; }
+  .score-row .sv { width: 46px; text-align: right; font-family: var(--mono); font-size: 11px; flex: none; }
+  .score-bar { flex: 1; height: 5px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+  .score-bar i { display: block; height: 100%; border-radius: 3px; }
+  .gauge-verdict { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; margin-top: 8px; }
+  /* Security / updates lists */
+  .sec-table { width: 100%; font-size: 12.5px; }
+  .sec-item { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line-soft); }
+  .sec-item:first-child { border-top: 0; }
+  .sec-item .msg { flex: 1; min-width: 0; line-height: 1.4; }
+  .sec-item .sev { flex: none; }
+  .sev-pill { font-size: 10.5px; font-weight: 600; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 9px; border-radius: 12px; }
+  .sev-pill.high { background: color-mix(in srgb, var(--fail) 16%, transparent); color: var(--fail); }
+  .sev-pill.med { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+  .sev-pill.low { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info); }
+  .upd-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line-soft); font-size: 12.5px; }
+  .upd-item:first-child { border-top: 0; }
+  .upd-item .ver { font-family: var(--mono); font-size: 11px; color: var(--warn); white-space: nowrap; }
+  .upd-item .kind { color: var(--faint); font-size: 10.5px; font-family: var(--mono); text-transform: uppercase; margin-left: 6px; }
+  .allgood { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 22px 0; color: var(--muted); font-size: 12.5px; }
+  .allgood .big-ic { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+  .allgood .big-ic svg { width: 22px; height: 22px; }
+  /* PageSpeed detail */
+  .ps-wrap { display: flex; gap: 18px; align-items: flex-start; }
+  .ps-metrics { flex: 1; min-width: 0; }
+  .ps-mrow { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 6px 0; border-top: 1px solid var(--line-soft); }
+  .ps-mrow:first-child { border-top: 0; }
+  .ps-mrow .mk { width: 44px; color: var(--muted); font-family: var(--mono); font-size: 11px; flex: none; }
+  .ps-mrow .mv { font-weight: 600; }
+  .ps-mrow .mjudge { margin-left: auto; font-size: 11px; font-weight: 600; }
+  .ps-recs { margin: 12px 0 0; padding: 0; list-style: none; }
+  .ps-recs li { display: flex; gap: 8px; font-size: 12px; color: var(--muted); padding: 4px 0; line-height: 1.45; }
+  .ps-recs li::before { content: "→"; color: var(--accent); flex: none; }
+  /* Detail history chart + table */
+  .sd-chart { margin-top: 4px; }
+  .sd-legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .sd-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .sd-events { list-style: none; margin: 12px 0 0; padding: 0; }
+  .sd-events li { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 0; border-top: 1px solid var(--line-soft); }
+  .sd-events li:first-child { border-top: 0; }
+  /* Skeleton loading */
+  .skel { position: relative; overflow: hidden; background: var(--panel-2); border-radius: 8px; }
+  .skel::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255,255,255,0.055), transparent); animation: shimmer 1.4s infinite; }
+  @keyframes shimmer { 100% { transform: translateX(100%); } }
+  @media (max-width: 1200px) { .sd-grid.g3, .sd-grid.g3b { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 900px) {
+    .sd-grid.g3, .sd-grid.g3b, .sd-grid.g21 { grid-template-columns: 1fr; }
+    .sd-head h1 { font-size: 21px; }
+    .gauge-wrap { flex-direction: column; align-items: stretch; }
+    .gauge { margin: 0 auto; }
+  }
   /* Analytics panel */
   .ana-top { row-gap: 10px; flex-wrap: wrap; }
   .ana-live { display: inline-flex; align-items: center; gap: 8px; }
@@ -369,6 +458,10 @@
         <div class="searchbar"><span class="search-ic" id="searchIc">__ICON_SEARCH__</span><input id="siteSearch" type="search" placeholder="Search websites by name or URL…" oninput="onSiteSearch(this.value)" autocomplete="off" /></div>
         <div id="board"></div>
         <div class="foot" id="foot"></div>
+      </section>
+
+      <section class="view" id="view-sitedetail" hidden>
+        <div id="siteDetailRoot"></div>
       </section>
 
       <section class="view" id="view-websites" hidden>
@@ -527,6 +620,7 @@ function render(data) {
 
   if (currentView === "websites") renderWebsitesList();
   if (currentView === "landing") renderLanding();
+  if (currentView === "sitedetail") fillSiteDetail();
 }
 function rank(s) { return { fail: 3, warn: 2, ok: 1, skip: 0 }[s] || 0; }
 
@@ -535,80 +629,256 @@ function statCard(kind, n, sub, label, icon) {
 }
 function statusBadge(o) { const [c, t] = statusInfo(o); return `<span class="badge ${c}">${t}</span>`; }
 
+// Rows are summaries only \u2014 clicking navigates to the Website Detail Dashboard.
 function renderRow(s) {
-  const open = openRows.has(s.id) ? " open" : "";
   let cells = "";
   CHECKS.forEach(([key, label]) => {
     const c = (s.checks && s.checks[key]) || { status: "skip", label: "\u2014" };
     cells += `<div class="cell ${c.status}" title="${esc(c.detail || "")}"><span class="cklabel">${label}</span><span class="dot ${c.status}"></span><span class="lbl">${esc(c.label || "\u2014")}</span></div>`;
   });
-  return `<div class="site-block ${s.overall}${open}" id="row-${s.id}">
-      <div class="mrow cols" onclick="toggle('${s.id}')">
+  return `<div class="site-block ${s.overall}" id="row-${s.id}">
+      <div class="mrow cols" onclick="openSiteDetail('${s.id}')">
         <div class="site"><span class="nm">${esc(s.name)}</span><span class="ur">${esc(s.url)}</span></div>
         ${cells}
-        <div class="stcell">${statusBadge(s.overall)}<span class="chev">${ICON.chevron}</span></div>
+        <div class="stcell">${statusBadge(s.overall)}<span class="chev" style="transform:rotate(-90deg)">${ICON.chevron}</span></div>
       </div>
-      <div class="detail">${detailHtml(s)}</div>
     </div>`;
 }
 
-function detailHtml(s) {
-  const cards = CHECKS.map(([key, label]) => {
-    const c = (s.checks && s.checks[key]) || { status: "skip", label: "\u2014", detail: "" };
-    let extra = "";
-    if (key === "plugins" && c.meta) {
-      const u = c.meta.pluginUpdates || [], t = c.meta.themeUpdates || [];
-      if (c.meta.coreUpdate) extra += `<div class="sub">WordPress core \u2192 ${esc(c.meta.coreNewVersion || "update")}</div>`;
-      if (u.length) extra += '<ul class="ulist">' + u.map((p) => `<li><span>${esc(p.name)}</span><span class="ver">${esc(p.current || "?")} \u2192 ${esc(p.new_version || "?")}</span></li>`).join("") + "</ul>";
-      if (t.length) extra += '<ul class="ulist">' + t.map((p) => `<li><span>${esc(p.name)} (theme)</span><span class="ver">${esc(p.current || "?")} \u2192 ${esc(p.new_version || "?")}</span></li>`).join("") + "</ul>";
-    }
-    if (key === "ctm" && c.meta && c.meta.phones && c.meta.phones.length) {
-      extra += `<div class="ctm-phones"><span class="ctm-phones-lbl">Number${c.meta.phones.length > 1 ? "s" : ""} on page</span>${c.meta.phones.map((p) => `<span class="phone-chip">${ICON.phone}${esc(p)}</span>`).join("")}</div>`;
-    }
-    if (key === "security" && c.meta) {
-      const f = c.meta.findings || [];
-      if (f.length) {
-        extra += '<ul class="sec-list">' + f.map((x) => `<li class="sev-${x.sev}"><span class="sec-dot"></span>${esc(x.msg)}</li>`).join("") + "</ul>";
-      }
-      if (c.meta.deepScannedAt) {
-        extra += `<div class="sub">Deep scan: ${c.meta.filesScanned || 0} files server-side${c.meta.deepPartial ? " (partial — rescan for full coverage)" : ""}</div>`;
-      } else if (c.meta.deepUnavailable) {
-        extra += `<div class="sub">Deep file scan unavailable — update the helper plugin to v1.3.</div>`;
-      }
-      if (c.meta.missingHeaders && c.meta.missingHeaders.length) {
-        extra += `<div class="sub">Hardening: add ${esc(c.meta.missingHeaders.join(", "))}</div>`;
-      }
-    }
-    if (key === "pagespeed" && c.metrics) {
-      const m = c.metrics;
-      const bits = [m.lcp && "LCP " + m.lcp, m.cls && "CLS " + m.cls, m.tbt && "TBT " + m.tbt, m.fcp && "FCP " + m.fcp].filter(Boolean);
-      if (bits.length) extra += '<div class="sub">' + esc(bits.join(" \u00b7 ")) + "</div>";
-    }
-    if (key === "clickup" && c.meta) {
-      const bl = c.meta.byList || [];
-      if (bl.length) extra += '<ul class="ulist">' + bl.map((l) => `<li><span>${esc(l.name)}</span><span class="ver">${l.active} open \u00b7 ${l.done} done</span></li>`).join("") + "</ul>";
-      const total = (c.meta.active || 0) + (c.meta.done || 0);
-      extra += `<button class="tasks-btn" onclick="event.stopPropagation(); openTasks('${s.id}')">View ${total ? total + " " : ""}tasks</button>`;
-      if (c.meta.spaceUrl) extra += `<div class="sub"><a href="${esc(c.meta.spaceUrl)}" target="_blank" rel="noopener" style="color:var(--accent)">Open in ClickUp \u2192</a></div>`;
-    }
-    return `<div class="dcard"><h4><span class="ci">${CICON[key] || ""}</span>${label}<span class="dot ${c.status}"></span></h4>
-        <div class="val">${esc(c.label || "\u2014")}</div><div class="sub">${esc(c.detail || "")}</div>${extra}</div>`;
+// ---------- Website Detail Dashboard (/websites/:id) ----------
+let currentSiteId = null;
+const sdState = {}; // siteId -> { uptime, days, lastRun }
+
+function siteSummary(id) {
+  const w = WEBSITES.find((x) => x.id === id);
+  const r = latestData && latestData.sites && latestData.sites[id];
+  if (r) return { ...r, name: (w && w.name) || r.name, url: (w && w.url) || r.url };
+  if (w) return { id, name: w.name, url: w.url, overall: "skip", checks: {}, pending: true };
+  return null;
+}
+
+function openSiteDetail(id, push = true) {
+  currentSiteId = id;
+  if (push) history.pushState({ siteId: id }, "", "/websites/" + id);
+  showView("sitedetail");
+  renderSiteDetailShell();
+  fillSiteDetail();
+  loadDetailHistory(id);
+  loadAnalytics(id);
+  loadSocial(id);
+}
+function closeSiteDetail() { showView("dashboard"); }
+window.addEventListener("popstate", () => {
+  const m = location.pathname.match(/^\/websites\/([\w-]+)/);
+  if (m) openSiteDetail(m[1], false);
+  else if (currentView === "sitedetail") { currentSiteId = null; showView("dashboard"); }
+});
+
+// Skeleton shell rendered immediately; panels fill in as data arrives.
+function renderSiteDetailShell() {
+  const s = siteSummary(currentSiteId) || { name: "…", url: "", overall: "skip" };
+  const skel = (h) => `<div class="skel" style="height:${h}px"></div>`;
+  const cardSkel = `<div class="sdc">${skel(13)}<div style="height:10px"></div>${skel(24)}</div>`;
+  document.getElementById("siteDetailRoot").innerHTML = `
+    <button class="sd-back" onclick="closeSiteDetail()">← Back to dashboard</button>
+    <div class="sd-head">
+      <div>
+        <h1 id="sd-name">${esc(s.name)}</h1>
+        <a class="sd-url" id="sd-urla" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>
+      </div>
+      <div class="sd-head-right">
+        <span id="sd-badge">${statusBadge(s.overall)}</span>
+        <span class="sd-checked" id="sd-checked"></span>
+        <button class="btn primary" id="sd-runbtn" onclick="sdRunCheck()">${ICON.run} Run check</button>
+        <a class="btn" id="sd-openbtn" href="${esc(s.url)}" target="_blank" rel="noopener">${ICON.globe} Open website</a>
+        ${ME.perms.manageWebsites ? `<button class="btn" onclick="editWebsite('${esc(currentSiteId)}')">Edit</button>` : ""}
+      </div>
+    </div>
+    <div class="sd-cards" id="sd-cards">${Array(8).fill(cardSkel).join("")}</div>
+    <div class="sd-grid g3">
+      <div class="sdp"><h3><span class="ci">${ICON.shieldCheck}</span>Website Health Score</h3><div id="sd-health">${skel(130)}</div></div>
+      <div class="sdp"><h3><span class="ci">${ICON.gauge}</span>PageSpeed Trend</h3><div id="sd-pstrend">${skel(150)}</div></div>
+      <div class="sdp"><h3><span class="ci">${ICON.run}</span>Uptime / Response Time<span class="count-pill" id="sd-upt-pill"></span></h3><div id="sd-uptime">${skel(150)}</div></div>
+    </div>
+    <div class="sd-grid g3b">
+      <div class="sdp"><h3><span class="ci">${ICON.shield}</span>Security Warnings<span class="count-pill" id="sd-seccount"></span></h3><div id="sd-security">${skel(110)}</div></div>
+      <div class="sdp"><h3><span class="ci">${ICON.download}</span>Updates<span class="count-pill" id="sd-updcount"></span></h3><div id="sd-updates">${skel(110)}</div></div>
+      <div class="sdp"><h3><span class="ci">${ICON.gauge}</span>PageSpeed</h3><div id="sd-psdetail">${skel(110)}</div></div>
+    </div>
+    <div class="sd-grid g21">
+      <div class="sdp"><h3><span class="ci">${ICON.dash}</span>Analytics</h3><div id="ana-${esc(currentSiteId)}">${skel(120)}</div></div>
+      <div class="sdp"><h3><span class="ci">${ICON.users}</span>Social links</h3><div id="social-${esc(currentSiteId)}">${skel(80)}</div></div>
+    </div>
+    <div class="sdp" style="margin-bottom:16px"><h3><span class="ci">${ICON.layers}</span>Recent Check History</h3><div id="sd-history">${skel(140)}</div></div>`;
+}
+
+// Fill everything derivable from the latest sweep (cheap; re-run on every poll).
+function fillSiteDetail() {
+  if (currentView !== "sitedetail" || !currentSiteId) return;
+  const s = siteSummary(currentSiteId);
+  if (!s) return;
+  const g = (id) => document.getElementById(id);
+  if (!g("sd-cards")) return;
+  g("sd-name").textContent = s.name;
+  g("sd-urla").textContent = s.url; g("sd-urla").href = s.url;
+  g("sd-badge").innerHTML = statusBadge(s.overall);
+  g("sd-checked").textContent = latestData && latestData.lastRun ? "Last checked: " + new Date(latestData.lastRun).toLocaleString() : "";
+  document.getElementById("pageTitle").textContent = s.name;
+  const rb = g("sd-runbtn");
+  if (rb && latestData && !latestData.running && rb.dataset.busy === "1") { rb.dataset.busy = "0"; rb.disabled = false; rb.innerHTML = ICON.run + " Run check"; }
+  const c = (k) => (s.checks && s.checks[k]) || { status: "skip", label: "—", detail: "" };
+
+  // Metric cards.
+  const CARD_KEYS = [["https", "HTTPS"], ["ssl", "SSL"], ["cloudflare", "Cloudflare"], ["ctm", "CTM"], ["googleTag", "Google Tag"], ["pagespeed", "PageSpeed"], ["plugins", "Updates"], ["security", "Security"]];
+  g("sd-cards").innerHTML = CARD_KEYS.map(([k, label]) => {
+    const ck = c(k);
+    return `<div class="sdc ${ck.status}"><div class="t"><span class="ci">${CICON[k] || ""}</span>${label}</div><div class="v" title="${esc(ck.label || "")}">${esc(ck.label || "—")}</div><div class="s" title="${esc(ck.detail || "")}">${esc(ck.detail || "") || "&nbsp;"}</div></div>`;
   }).join("");
-  return '<div class="detail-inner">' + cards + "</div>" + detailFoot(s);
+
+  fillHealth(s);
+  fillSecurity(c("security"));
+  fillUpdates(c("plugins"));
+  fillPsDetail(c("pagespeed"));
+
+  // A new sweep finished while we're on the page — refresh the heavier panels.
+  const lr = latestData && latestData.lastRun;
+  const st = sdState[s.id] || (sdState[s.id] = {});
+  if (lr && st.lastRun && st.lastRun !== lr) { loadDetailHistory(s.id); loadAnalytics(s.id, undefined, true); }
+  st.lastRun = lr;
 }
-function detailFoot(s) {
-  let btns = "";
-  if (ME.perms.manageWebsites) btns += `<button class="btn sm" onclick="event.stopPropagation(); editWebsite('${s.id}')">Edit site</button>`;
-  if (ME.perms.deleteWebsite) btns += `<button class="btn sm danger" onclick="event.stopPropagation(); deleteWebsite('${s.id}', '${esc((s.name || "").replace(/'/g, ""))}')">Delete site</button>`;
-  const actions = btns ? `<div class="site-actions">${btns}</div>` : "";
-  const cache = detailCache[s.id] || {};
-  return `<div class="detail-foot">${actions}<div class="social-box"><h4>Analytics</h4><div id="ana-${s.id}">${cache.ana || "\u2026"}</div></div><div class="social-box" style="margin-top:16px"><h4>Social links</h4><div id="social-${s.id}">${cache.social || "\u2026"}</div></div><div class="social-box" style="margin-top:16px"><h4>History (30 days)</h4><div id="hist-${s.id}">${cache.hist || "\u2026"}</div></div></div>`;
+
+function statusScore(st) { return st === "ok" ? 100 : st === "warn" ? 60 : st === "fail" ? 25 : null; }
+function psScoreOf(ck) { const n = parseInt(ck && ck.label, 10); return Number.isFinite(n) ? n : null; }
+function scoreColor(v) { return v >= 90 ? "var(--ok)" : v >= 60 ? "var(--warn)" : "var(--fail)"; }
+
+function fillHealth(s) {
+  const box = document.getElementById("sd-health");
+  const cc = s.checks || {};
+  const pair = (a, b) => { const v = [a, b].filter((x) => x != null); return v.length ? v.reduce((x, y) => x + y, 0) / v.length : null; };
+  const st = sdState[s.id] || {};
+  const psv = psScoreOf(cc.pagespeed);
+  const cats = [
+    ["Performance", psv != null ? psv : statusScore((cc.pagespeed || {}).status)],
+    ["Security", statusScore((cc.security || {}).status)],
+    ["SEO & Tags", pair(statusScore((cc.googleTag || {}).status), statusScore((cc.ctm || {}).status))],
+    ["Uptime", st.uptime != null ? Math.round(st.uptime) : statusScore((cc.https || {}).status)],
+    ["Updates", statusScore((cc.plugins || {}).status)],
+  ].filter((x) => x[1] != null);
+  if (!cats.length) { box.innerHTML = '<div class="empty-sm">No checks have run yet — run a check to compute the health score.</div>'; return; }
+  const overall = Math.round(cats.reduce((a, x) => a + x[1], 0) / cats.length);
+  const verdict = overall >= 90 ? ["Excellent", "var(--ok)"] : overall >= 75 ? ["Good", "var(--ok)"] : overall >= 50 ? ["Needs attention", "var(--warn)"] : ["Critical", "var(--fail)"];
+  const rows = cats.map((x) => `<div class="score-row"><span class="sk">${x[0]}</span><span class="score-bar"><i style="width:${Math.round(x[1])}%;background:${scoreColor(x[1])}"></i></span><span class="sv">${Math.round(x[1])}/100</span></div>`).join("");
+  box.innerHTML = `<div class="gauge-wrap"><div class="gauge">${gaugeSvg(overall)}<div class="gn"><b>${overall}</b><span>/100</span></div></div><div class="score-rows">${rows}<span class="gauge-verdict" style="color:${verdict[1]}"><span class="dot" style="background:${verdict[1]}"></span>${verdict[0]}</span></div></div>`;
 }
-function toggle(id) {
-  if (openRows.has(id)) openRows.delete(id);
-  else { openRows.add(id); loadSocial(id); loadHistory(id); loadAnalytics(id); }
-  const row = document.getElementById("row-" + id);
-  if (row) row.classList.toggle("open");
+function gaugeSvg(score) {
+  const r = 44, C = 2 * Math.PI * r;
+  return `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--panel-2)" stroke-width="8"/><circle cx="50" cy="50" r="${r}" fill="none" stroke="${scoreColor(score)}" stroke-width="8" stroke-linecap="round" stroke-dasharray="${(C * Math.max(0, Math.min(100, score)) / 100).toFixed(1)} ${C.toFixed(1)}"/></svg>`;
+}
+
+function fillSecurity(ck) {
+  const box = document.getElementById("sd-security"), pill = document.getElementById("sd-seccount");
+  const meta = ck.meta || {};
+  const rows = [];
+  (meta.findings || []).forEach((f) => rows.push({ sev: f.sev === "high" ? "high" : "med", msg: f.msg, action: f.sev === "high" ? "Investigate & remove" : "Review" }));
+  if (meta.missingHeaders && meta.missingHeaders.length) rows.push({ sev: "low", msg: "Hardening: add " + meta.missingHeaders.join(", "), action: "Add headers" });
+  pill.textContent = rows.length || "";
+  pill.classList.toggle("warn", rows.length > 0);
+  if (ck.status === "skip") { box.innerHTML = '<div class="empty-sm">No security scan yet — data appears after the first sweep.</div>'; return; }
+  if (!rows.length) {
+    box.innerHTML = `<div class="allgood"><span class="big-ic">${ICON.shieldCheck}</span><b style="color:var(--text)">No active threats</b>Your website is clean and secure.${meta.deepScannedAt ? `<span style="font-size:11px;color:var(--faint)">Deep scan: ${meta.filesScanned || 0} files checked server-side</span>` : ""}</div>`;
+    return;
+  }
+  box.innerHTML = '<div class="sec-table">' + rows.map((r) => `<div class="sec-item"><span class="sev-pill ${r.sev}">${r.sev === "med" ? "medium" : r.sev}</span><span class="msg">${esc(r.msg)}</span><span class="sev" style="color:var(--muted);font-size:11px">${esc(r.action)}</span></div>`).join("") + "</div>";
+}
+
+function fillUpdates(ck) {
+  const box = document.getElementById("sd-updates"), pill = document.getElementById("sd-updcount");
+  const meta = ck.meta || {};
+  const rows = [];
+  if (meta.coreUpdate) rows.push({ name: "WordPress core", kind: "core", ver: "→ " + (meta.coreNewVersion || "update") });
+  (meta.pluginUpdates || []).forEach((p) => rows.push({ name: p.name, kind: "plugin", ver: (p.current || "?") + " → " + (p.new_version || "?") }));
+  (meta.themeUpdates || []).forEach((t) => rows.push({ name: t.name, kind: "theme", ver: (t.current || "?") + " → " + (t.new_version || "?") }));
+  pill.textContent = rows.length || "";
+  pill.classList.toggle("warn", rows.length > 0);
+  if (ck.status === "skip") { box.innerHTML = '<div class="empty-sm">' + esc(ck.detail || "Updates need the helper plugin — install it to see pending updates.") + "</div>"; return; }
+  if (!rows.length) { box.innerHTML = `<div class="allgood"><span class="big-ic">${ICON.checkSquare}</span><b style="color:var(--text)">Everything up to date</b>Core, plugins and themes are current.</div>`; return; }
+  box.innerHTML = rows.map((r) => `<div class="upd-item"><span>${esc(r.name)}<span class="kind">${r.kind}</span></span><span class="ver">${esc(r.ver)}</span></div>`).join("");
+}
+
+function fillPsDetail(ck) {
+  const box = document.getElementById("sd-psdetail");
+  const score = psScoreOf(ck);
+  if (ck.status === "skip" || score == null) { box.innerHTML = '<div class="empty-sm">No PageSpeed data yet — it appears after the first PageSpeed run (they’re throttled, so give it a minute).</div>'; return; }
+  const m = ck.metrics || {};
+  const judge = (val, good, ni) => { const n = parseFloat(val); if (!Number.isFinite(n)) return ["", ""]; return n <= good ? ["Good", "var(--ok)"] : n <= ni ? ["Needs work", "var(--warn)"] : ["Poor", "var(--fail)"]; };
+  const rows = [["LCP", m.lcp, judge(m.lcp, 2.5, 4)], ["CLS", m.cls, judge(m.cls, 0.1, 0.25)], ["TBT", m.tbt, judge(m.tbt, 200, 600)], ["FCP", m.fcp, judge(m.fcp, 1.8, 3)]]
+    .filter((x) => x[1] != null && x[1] !== "")
+    .map((x) => `<div class="ps-mrow"><span class="mk">${x[0]}</span><span class="mv">${esc(x[1])}</span>${x[2][0] ? `<span class="mjudge" style="color:${x[2][1]}">${x[2][0]}</span>` : ""}</div>`).join("");
+  const recs = [];
+  if (parseFloat(m.lcp) > 2.5) recs.push("Improve Largest Contentful Paint — compress hero images, use lazy-loading and caching.");
+  if (parseFloat(m.cls) > 0.1) recs.push("Reduce layout shift — set explicit width/height on images, embeds and ads.");
+  if (parseFloat(m.tbt) > 200) recs.push("Cut Total Blocking Time — defer non-critical JavaScript and split large bundles.");
+  if (score < 90 && !recs.length) recs.push("Enable page caching and image compression to push the score above 90.");
+  if (!recs.length) recs.push("Core Web Vitals look good — no major issues detected.");
+  box.innerHTML = `<div class="ps-wrap"><div class="gauge sm">${gaugeSvg(score)}<div class="gn"><b>${score}</b><span>/100</span></div></div><div class="ps-metrics">${rows || '<div class="empty-sm">No Core Web Vitals reported.</div>'}</div></div><ul class="ps-recs">${recs.map((r) => `<li>${r}</li>`).join("")}</ul>`;
+}
+
+// PageSpeed trend, uptime/response charts and the check-history table.
+async function loadDetailHistory(siteId, days) {
+  const st = sdState[siteId] || (sdState[siteId] = {});
+  days = days || st.days || 7;
+  st.days = days;
+  const gp = document.getElementById("sd-pstrend"), gu = document.getElementById("sd-uptime"), gh = document.getElementById("sd-history");
+  if (!gp || !gu || !gh) return;
+  try {
+    const res = await fetch("/api/history/" + siteId + "?days=" + days);
+    const j = await res.json();
+    if (!j.ok) throw new Error(j.error);
+    st.uptime = j.uptime;
+    const S = j.samples || [];
+    const ranges = [7, 30, 90].map((d) => `<button class="hrange${days === d ? " on" : ""}" onclick="loadDetailHistory('${siteId}',${d})">${d}d</button>`).join("");
+
+    // PageSpeed trend.
+    const ps = S.filter((x) => typeof x.pagespeed === "number").map((x) => x.pagespeed);
+    gp.innerHTML = ps.length > 1
+      ? `<div class="hist-top"><span class="hist-up" style="color:${scoreColor(ps[ps.length - 1])}">${Math.round(ps[ps.length - 1])}</span><span class="hist-up-lbl">latest · ${days} days</span><div class="hranges">${ranges}</div></div><div class="sd-chart">${lineChart(ps, { color: scoreColor(ps[ps.length - 1]), W: 480, H: 120 })}</div>`
+      : '<div class="empty-sm">Not enough PageSpeed samples yet — the trend appears after a few sweeps.</div>';
+
+    // Uptime / response time.
+    const rt = S.filter((x) => typeof x.responseMs === "number").map((x) => x.responseMs);
+    const pill = document.getElementById("sd-upt-pill");
+    if (pill) pill.textContent = j.uptime == null ? "" : j.uptime + "% up";
+    gu.innerHTML = rt.length > 1
+      ? `<div class="hist-top"><span class="hist-up">${j.uptime == null ? "—" : j.uptime + "%"}</span><span class="hist-up-lbl">uptime · ${days} days</span><div class="hranges">${ranges}</div></div>` +
+        `<div class="sd-legend"><span><i style="background:var(--accent)"></i>Response time (ms) — latest ${Math.round(rt[rt.length - 1])}ms</span></div>` +
+        `<div class="sd-chart">${lineChart(rt, { color: "var(--accent)", W: 480, H: 110, zeroBase: true })}</div>`
+      : '<div class="empty-sm">No uptime samples in this range yet.</div>';
+
+    // Recent check history table + status changes.
+    const recent = S.slice(-12).reverse();
+    const trows = recent.map((x) => {
+      const si = statusInfo(x.overall);
+      return `<tr><td>${new Date(x.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td><span class="badge ${si[0]}">${si[1]}</span></td><td>${x.pagespeed != null ? x.pagespeed + " /100" : "—"}</td><td>${x.responseMs != null ? x.responseMs + " ms" : "—"}</td><td>${x.sslDays != null ? x.sslDays + " days" : "—"}</td></tr>`;
+    }).join("");
+    const events = (j.events || []).slice(0, 6).map((e) => {
+      const si = statusInfo(e.to);
+      return `<li><span class="dot ${si[0]}"></span>${esc(e.from ? statusInfo(e.from)[1] : "New")} → ${esc(si[1])}<span class="hist-when">${relTime(e.at)}</span></li>`;
+    }).join("");
+    gh.innerHTML = recent.length
+      ? `<div style="overflow-x:auto"><table class="ttable"><thead><tr><th>Time</th><th>Status</th><th>PageSpeed</th><th>Response</th><th>SSL</th></tr></thead><tbody>${trows}</tbody></table></div>` +
+        (events ? `<h4 style="margin:16px 0 4px;font-family:var(--mono);font-size:10.5px;letter-spacing:0.05em;text-transform:uppercase;color:var(--faint)">Status changes</h4><ul class="sd-events">${events}</ul>` : "")
+      : '<div class="empty-sm">No check history recorded yet — it builds up as sweeps run.</div>';
+    fillSiteDetail(); // uptime feeds the health score
+  } catch (e) {
+    gp.innerHTML = gu.innerHTML = gh.innerHTML = '<div class="empty-sm">Could not load history.</div>';
+  }
+}
+
+async function sdRunCheck() {
+  const b = document.getElementById("sd-runbtn");
+  if (b) { b.disabled = true; b.dataset.busy = "1"; b.innerHTML = '<span class="spinner"></span> Running'; }
+  try { await fetch("/api/check", { method: "POST" }); scheduleResults(2500); }
+  catch (e) { if (b) { b.disabled = false; b.dataset.busy = "0"; b.innerHTML = ICON.run + " Run check"; } }
 }
 
 // ---------- Views / navigation ----------
@@ -618,13 +888,19 @@ function onSiteSearch(v) {
 }
 function showView(name) {
   currentView = name;
-  const views = ["dashboard", "websites", "landing", "mytasks", "settings"];
+  // Leaving the detail page: reset the URL and forget the open site.
+  if (name !== "sitedetail" && location.pathname.startsWith("/websites/")) {
+    currentSiteId = null;
+    history.pushState({}, "", "/");
+  }
+  const views = ["dashboard", "sitedetail", "websites", "landing", "mytasks", "settings"];
   views.forEach((v) => { const el = document.getElementById("view-" + v); if (el) el.hidden = v !== name; });
-  const titles = { dashboard: "Dashboard", websites: "Websites", landing: "Landing pages", mytasks: "My tasks", settings: "Settings" };
+  const titles = { dashboard: "Dashboard", websites: "Websites", landing: "Landing pages", mytasks: "My tasks", settings: "Settings", sitedetail: "Website detail" };
   document.getElementById("pageTitle").textContent = titles[name] || "Dashboard";
   views.forEach((v) => {
-    const n = document.getElementById("nav-" + v); if (n) n.classList.toggle("active", v === name);
-    const b = document.getElementById("bn-" + v); if (b) b.classList.toggle("active", v === name);
+    const active = v === name || (name === "sitedetail" && v === "dashboard");
+    const n = document.getElementById("nav-" + v); if (n) n.classList.toggle("active", active);
+    const b = document.getElementById("bn-" + v); if (b) b.classList.toggle("active", active);
   });
   if (name === "websites") renderWebsitesList();
   if (name === "landing") refreshLanding().then(renderLanding);
@@ -697,6 +973,9 @@ async function boot() {
   await refreshLanding();
   await load();
   startLive();
+  // Deep link: /websites/:id opens the Website Detail Dashboard directly.
+  const dm = location.pathname.match(/^\/websites\/([\w-]+)/);
+  if (dm) openSiteDetail(dm[1], false);
   fetchMyTasksCount();
   setInterval(fetchMyTasksCount, 300000); // refresh the badge every 5 minutes
 }
@@ -797,7 +1076,7 @@ async function deleteWebsite(id, name) {
   if (!confirm(`Delete "${name}"? This removes it from monitoring and deletes its social links.`)) return;
   const res = await fetch("/api/websites/" + id, { method: "DELETE" });
   const j = await res.json();
-  if (j.ok) { openRows.delete(id); delete detailCache[id]; afterMutation(); } else alert(j.error || "Delete failed");
+  if (j.ok) { openRows.delete(id); delete detailCache[id]; if (currentSiteId === id) closeSiteDetail(); afterMutation(); } else alert(j.error || "Delete failed");
 }
 
 // ---------- Landing pages ----------
@@ -1094,10 +1373,10 @@ async function loadAnalytics(siteId, days, quiet) {
     detailCache[siteId] = { ...detailCache[siteId], ana: box.innerHTML };
   } catch (e) { fail("Could not load analytics."); }
 }
-// Keep "on site now" fresh for any open rows.
+// Keep "on site now" fresh while the detail page is open.
 setInterval(() => {
-  if (currentView !== "dashboard" || document.hidden) return;
-  openRows.forEach((id) => loadAnalytics(id, undefined, true));
+  if (currentView !== "sitedetail" || !currentSiteId || document.hidden) return;
+  loadAnalytics(currentSiteId, undefined, true);
 }, 30000);
 
 // Social links inside the Edit website modal (mirrors the drawer, kept in sync).

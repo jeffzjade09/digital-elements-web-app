@@ -136,6 +136,8 @@ app.get("/logo.png", (req, res) => res.sendFile(path.join(PUBLIC, "logo.png")));
 
 // ---- Everything below requires a signed-in user ----
 app.get("/", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "index.html")));
+// Website detail dashboard — same SPA, routed client-side.
+app.get("/websites/:id", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "index.html")));
 
 app.get("/api/me", requireAuth, (req, res) => {
   res.json({ ok: true, user: { email: req.user.email, name: req.user.name, role: req.user.role }, perms: permsFor(req.user.role) });
