@@ -53,7 +53,7 @@ export function configureAuth(app, settings) {
         const user = await getUserByEmail(email);
         if (!user) return done(null, false, { message: "not-allowed" }); // not on the allow-list
         await touchLogin(user.id, profile.displayName);
-        return done(null, { id: user.id, email: user.email, name: profile.displayName || user.name, role: user.role });
+        return done(null, { id: user.id, email: user.email, name: profile.displayName || user.name, role: user.role, theme: user.theme || "dark" });
       } catch (err) {
         return done(err);
       }
@@ -66,7 +66,7 @@ export function configureAuth(app, settings) {
     try {
       const u = await getUserById(id);
       if (!u) return done(null, false); // user was removed -> treated as logged out
-      done(null, { id: u.id, email: u.email, name: u.name, role: u.role });
+      done(null, { id: u.id, email: u.email, name: u.name, role: u.role, theme: u.theme || "dark" });
     } catch (err) {
       done(err);
     }

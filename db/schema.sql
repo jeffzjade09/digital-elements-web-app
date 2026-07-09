@@ -14,6 +14,7 @@ create table if not exists app_users (
   name        text,
   role        text not null default 'seo'
               check (role in ('admin','webdev','seo','publisher','social')),
+  theme       text not null default 'dark',   -- 'dark' | 'light' | 'system'
   created_at  timestamptz not null default now(),
   last_login  timestamptz
 );

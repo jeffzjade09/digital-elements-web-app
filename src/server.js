@@ -17,7 +17,7 @@ import {
   listUsers, createUser, updateUserRole, deleteUser,
   getSocialLinks, addSocialLink, deleteSocialLink,
   getLandingPages, createLandingPage, updateLandingPage, deleteLandingPage,
-  getAppSettings, setAppSettings,
+  getAppSettings, setAppSettings, updateUserTheme,
   getStatusEvents, getMetricSamples, computeUptime,
   getWebsiteByLicense,
 } from "./db.js";
@@ -134,7 +134,18 @@ app.get("/logo.png", (req, res) => res.sendFile(path.join(PUBLIC, "logo.png")));
 app.get("/", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "index.html")));
 
 app.get("/api/me", requireAuth, (req, res) => {
-  res.json({ ok: true, user: { email: req.user.email, name: req.user.name, role: req.user.role }, perms: permsFor(req.user.role) });
+  res.json({ ok: true, user: { email: req.user.email, name: req.user.name, role: req.user.role, theme: req.user.theme || "dark" }, perms: permsFor(req.user.role) });
+});
+
+// Personal preferences — any signed-in user can change their own (unlike /api/settings).
+const THEMES = ["dark", "light", "system"];
+app.put("/api/me/preferences", requireAuth, async (req, res) => {
+  const theme = String(req.body?.theme || "").toLowerCase();
+  if (!THEMES.includes(theme)) return res.status(400).json({ ok: false, error: "Theme must be dark, light, or system" });
+  try {
+    await updateUserTheme(req.user.id, theme);
+    res.json({ ok: true, theme });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
 app.get("/api/results", requireAuth, (req, res) => {
