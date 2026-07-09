@@ -1,5 +1,15 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.2.2
+- llms.txt is now written as a PHYSICAL file in the WordPress root (next to
+  robots.txt) when enabled, and removed when disabled. Required on hosts like
+  WP Engine whose web server answers .txt URLs directly from disk (the
+  dynamic route never ran, so /llms.txt returned the server's 404).
+- Dynamic serving remains as an automatic fallback when the root isn't
+  writable, with a clear warning shown in the editor.
+- Never deletes or silently replaces an llms.txt file the plugin didn't
+  write — a differing existing file triggers an overwrite warning first.
+
 ## 2.2.1
 - Fix: llms.txt starter template no longer shows HTML entities (e.g. "&amp;amp;")
   in the site title/tagline — decoded to plain text.
