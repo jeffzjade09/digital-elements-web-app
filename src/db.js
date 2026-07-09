@@ -186,6 +186,10 @@ export async function deleteUser(id) {
 export async function touchLogin(id, name) {
   await query("update app_users set last_login=now(), name=coalesce($2,name) where id=$1", [id, name || null]);
 }
+// Per-user preference: 'dark' | 'light' | 'system' (validated in the API layer).
+export async function updateUserTheme(id, theme) {
+  await query("update app_users set theme=$2 where id=$1", [id, theme]);
+}
 
 // ---- Social links ---------------------------------------------------------
 export async function getSocialLinks(websiteId) {
@@ -309,6 +313,9 @@ export async function deleteOldMetricSamples(days) {
 export async function bootstrap() {
   // Ensure schema essentials exist (idempotent) in case SQL wasn't run.
   await query(`create extension if not exists "pgcrypto"`);
+
+  // Self-migrate: per-user theme preference.
+  await query(`alter table app_users add column if not exists theme text not null default 'dark'`);
 
   // Self-migrate: add per-site license columns if this DB predates them.
   await query(`alter table websites add column if not exists license_key text`);
