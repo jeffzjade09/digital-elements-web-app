@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Digital Elements Helper Plugin
  * Description: Connects this site to the Digital Elements monitoring dashboard. Adds a DE Monitoring admin panel showing HTTPS, SSL, Cloudflare, CTM, Google Tag, PageSpeed, update status, security scan and history, plus a secure, read-only endpoint the central dashboard reads. It cannot modify the site, access content, or run updates.
- * Version:     2.1.0
+ * Version:     2.2.0
  * Author:      Digital Elements Group
  * Author URI:  https://digitalelementsgroup.com/
  * Plugin URI:  https://digitalelementsgroup.com/
@@ -33,7 +33,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('DEHELED_VERSION', '2.1.0');
+define('DEHELED_VERSION', '2.2.0');
 define('DEHELED_PLUGIN_FILE', __FILE__);
 define('DEHELED_BASENAME', plugin_basename(__FILE__));
 define('DEHELED_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -45,6 +45,8 @@ define('DEHELED_LICENSE_OPTION', 'deheled_license_key');
 define('DEHELED_SEC_OPTION', 'deheled_security_result');
 define('DEHELED_SEC_CRON', 'deheled_security_scan_event');
 define('DEHELED_LIC_STATUS', 'deheled_license_status');
+define('DEHELED_LLMS_OPTION', 'deheled_llms_content');
+define('DEHELED_LLMS_ENABLED', 'deheled_llms_enabled');
 
 // Central dashboard used to verify the license, fetch history, and check for
 // plugin updates. Override by defining DEHELED_HUB_URL in wp-config.php if
@@ -61,6 +63,7 @@ require_once DEHELED_PLUGIN_DIR . 'includes/license.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/updater.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/admin.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/analytics.php';
+require_once DEHELED_PLUGIN_DIR . 'includes/llms.php';
 
 // Clean up the daily security-scan cron when the plugin is deactivated.
 register_deactivation_hook(__FILE__, function () {

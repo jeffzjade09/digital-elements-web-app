@@ -1,5 +1,14 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.2.0
+- New: editable llms.txt. A new "llms.txt" page under DE Monitoring lets you
+  write and publish an llms.txt file (https://llmstxt.org/) that helps AI
+  assistants understand and cite the site. Served dynamically at /llms.txt —
+  the same way WordPress serves robots.txt, with nothing written to disk —
+  so it works with any permalink setup and survives core updates.
+- A starter template is generated automatically from the site's pages.
+- Warns if a physical llms.txt file in the WordPress root would override it.
+
 ## 2.1.0
 - New: lightweight page-view analytics. A tiny (<400 byte) inline beacon fires
   after each front-end page finishes loading (navigator.sendBeacon — zero

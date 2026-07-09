@@ -35,8 +35,11 @@ add_action('admin_head', function () {
 // Load the panel's stylesheet/script only on our page, passing server data
 // (nonce, cached results, last scan) via a localized object instead of inline JS.
 add_action('admin_enqueue_scripts', function ($hook) {
-    if ($hook !== 'toplevel_page_deheled-monitor') return;
+    $is_main = $hook === 'toplevel_page_deheled-monitor';
+    $is_llms = strpos((string) $hook, 'deheled-llms') !== false;
+    if (!$is_main && !$is_llms) return;
     wp_enqueue_style('deheled-admin', DEHELED_PLUGIN_URL . 'assets/admin.css', array(), DEHELED_VERSION);
+    if (!$is_main) return; // the panel script expects elements that only exist on the main page
     wp_enqueue_script('deheled-admin', DEHELED_PLUGIN_URL . 'assets/admin.js', array(), DEHELED_VERSION, true);
     $cached = get_transient(DEHELED_CACHE_KEY);
     $sec    = get_option(DEHELED_SEC_OPTION, null);
