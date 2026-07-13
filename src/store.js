@@ -60,6 +60,13 @@ export function loadSettings() {
       token: process.env.CLICKUP_API_TOKEN || "",
       teamId: process.env.CLICKUP_TEAM_ID || "",
     },
+    zoho: {
+      clientId: process.env.ZOHO_CLIENT_ID || "",
+      clientSecret: process.env.ZOHO_CLIENT_SECRET || "",
+      refreshToken: process.env.ZOHO_REFRESH_TOKEN || "",
+      portalId: process.env.ZOHO_PORTAL_ID || "",
+      dc: process.env.ZOHO_DC || "com",
+    },
     cron: process.env.CHECK_CRON || "0 */6 * * *",
     checkOnStart: bool(process.env.CHECK_ON_START, true),
     slackWebhook: process.env.SLACK_WEBHOOK_URL || "",

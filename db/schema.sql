@@ -34,6 +34,8 @@ create table if not exists websites (
   clickup_list_ids  text[] not null default '{}',
   clickup_folder_id text,
   clickup_space_id  text,
+  zoho_enabled      boolean not null default false,
+  zoho_project_ids  text[] not null default '{}',
   license_key       text unique,
   license_expires_at timestamptz,
   created_by        uuid references app_users(id) on delete set null,

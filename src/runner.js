@@ -9,6 +9,8 @@ import { checkCtm, checkGoogleTag } from "./checks/scripts.js";
 import { checkPageSpeed } from "./checks/pagespeed.js";
 import { checkPlugins, getDeepSecurity } from "./checks/plugins.js";
 import { checkClickUp } from "./checks/clickup.js";
+import { checkZoho } from "./checks/zoho.js";
+import { combineTaskChecks } from "./checks/tasks.js";
 import { checkSecurity, mergeDeepSecurity } from "./checks/security.js";
 
 // Worst status wins for the site-level roll-up. "skip"/"info" never lower a site
@@ -51,11 +53,12 @@ async function checkOneSite(site, settings) {
     ? getDeepSecurity(site.helper).catch(() => null)
     : Promise.resolve(null);
 
-  const [ssl, pagespeed, plugins, clickup, deep] = await Promise.all([
+  const [ssl, pagespeed, plugins, clickup, zoho, deep] = await Promise.all([
     checkSsl(site.url, settings.sslWarnDays),
     getPageSpeedCached(fetchResult.finalUrl || site.url, settings),
     pluginsPromise,
     checkClickUp(site.clickup, settings.clickup),
+    checkZoho(site.zoho, settings.zoho),
     deepPromise,
   ]);
 
@@ -70,7 +73,7 @@ async function checkOneSite(site, settings) {
     googleTag: checkGoogleTag(fetchResult, expect.googleTag !== false),
     pagespeed,
     plugins,
-    clickup,
+    tasks: combineTaskChecks([{ source: "clickup", check: clickup }, { source: "zoho", check: zoho }]),
     security,
   };
 

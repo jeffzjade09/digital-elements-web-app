@@ -248,6 +248,8 @@
   .ttable .tname a { color: var(--accent); text-decoration: none; }
   .ttable .badge { color: #fff; }
   .due-late { color: var(--fail); }
+  .src-chip { display: inline-block; font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 6px; margin-left: 6px; vertical-align: 1px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+  .src-chip.src-zoho { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, var(--line)); }
 
   /* ---------- Responsive ---------- */
   @media (max-width: 900px) {
@@ -573,7 +575,7 @@
 <script>
 const CHECKS = [
   ["https", "HTTPS"], ["ssl", "SSL"], ["cloudflare", "Cloudflare"], ["ctm", "CTM"],
-  ["googleTag", "Google Tag"], ["pagespeed", "PageSpeed"], ["plugins", "Updates"], ["clickup", "Tasks"],
+  ["googleTag", "Google Tag"], ["pagespeed", "PageSpeed"], ["plugins", "Updates"], ["tasks", "Tasks"],
   ["security", "Security"],
 ];
 const ROLE_LABELS = { admin: "Administrator", webdev: "Web Developer", seo: "SEO", publisher: "Publisher", social: "Social Media" };
@@ -802,7 +804,7 @@ function fillSiteDetail() {
   const c = (k) => (s.checks && s.checks[k]) || { status: "skip", label: "—", detail: "" };
 
   // Metric cards.
-  const CARD_KEYS = [["https", "HTTPS"], ["ssl", "SSL"], ["cloudflare", "Cloudflare"], ["ctm", "CTM"], ["googleTag", "Google Tag"], ["pagespeed", "PageSpeed"], ["plugins", "Updates"], ["security", "Security"]];
+  const CARD_KEYS = [["https", "HTTPS"], ["ssl", "SSL"], ["cloudflare", "Cloudflare"], ["ctm", "CTM"], ["googleTag", "Google Tag"], ["pagespeed", "PageSpeed"], ["plugins", "Updates"], ["tasks", "Tasks"], ["security", "Security"]];
   g("sd-cards").innerHTML = CARD_KEYS.map(([k, label]) => {
     const ck = c(k);
     return `<div class="sdc ${ck.status}"><div class="t"><span class="ci">${CICON[k] || ""}</span>${label}</div><div class="v" title="${esc(ck.label || "")}">${esc(ck.label || "—")}</div><div class="s" title="${esc(ck.detail || "")}">${esc(ck.detail || "") || "&nbsp;"}</div></div>`;
@@ -1005,6 +1007,7 @@ function incompleteReasons(w) {
   else if (w.license && w.license.expired) r.push("Monitoring license expired");
   else if (!w.helper.endpoint || !w.helper.token) r.push("Helper endpoint or token missing");
   if (w.clickup && w.clickup.enabled && (!w.clickup.listIds || !w.clickup.listIds.length)) r.push("ClickUp enabled but no List IDs");
+  if (w.zoho && w.zoho.enabled && (!w.zoho.projectIds || !w.zoho.projectIds.length)) r.push("Zoho enabled but no Project IDs");
   return r;
 }
 function renderSetupBanner() {
@@ -1073,6 +1076,8 @@ function openWebsiteModal(site) {
   g("f-url").value = site ? site.url : "";
   g("f-lists").value = site && site.clickup && site.clickup.listIds ? site.clickup.listIds.join(", ") : "";
   g("f-cu").checked = site ? !!(site.clickup && site.clickup.enabled) : false;
+  g("f-zprojects").value = site && site.zoho && site.zoho.projectIds ? site.zoho.projectIds.join(", ") : "";
+  g("f-zo").checked = site ? !!(site.zoho && site.zoho.enabled) : false;
   g("f-cf").checked = site ? site.expect.cloudflare !== false : true;
   g("f-ctm").checked = site ? site.expect.ctm !== false : true;
   g("f-gt").checked = site ? site.expect.googleTag !== false : true;
@@ -1139,6 +1144,7 @@ async function saveWebsite() {
   const body = {
     name: g("f-name").value, url: g("f-url").value,
     clickup_list_ids: g("f-lists").value, clickup_enabled: g("f-cu").checked,
+    zoho_project_ids: g("f-zprojects").value, zoho_enabled: g("f-zo").checked,
     expect_cloudflare: g("f-cf").checked, expect_ctm: g("f-ctm").checked, expect_google_tag: g("f-gt").checked,
     helper_endpoint: g("f-hep").value, helper_enabled: g("f-he").checked,
     license_duration: g("f-licdur").value,
@@ -1524,14 +1530,14 @@ async function renderMyTasks() {
     if (!j.ok) { box.innerHTML = '<div class="empty">' + esc(j.error || "Could not load tasks") + "</div>"; return; }
     const tasks = j.tasks || [];
     updateMyTasksBadge(tasks.length);
-    if (!tasks.length) { box.innerHTML = `<div class="empty"><h3>No open tasks</h3><p>Nothing in ClickUp is assigned to ${esc(j.email)} right now.</p></div>`; return; }
+    if (!tasks.length) { box.innerHTML = `<div class="empty"><h3>No open tasks</h3><p>Nothing in ClickUp or Zoho is assigned to ${esc(j.email)} right now.</p></div>`; return; }
     meta.textContent = `${tasks.length} open task${tasks.length > 1 ? "s" : ""} assigned to ${j.email}`;
     const rows = tasks.map((t) => {
       const badge = `<span class="badge" style="background:${esc(t.statusColor || "#5b6680")};color:#fff">${esc(t.status || "\u2014")}</span>`;
       const name = t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)}</a>` : esc(t.name);
       const due = `<span class="${t.overdue ? "due-late" : ""}">${fmtDue(t.dueMs)}</span>`;
       const pri = t.priority ? `<span style="color:${esc(t.priorityColor || "#8a96ad")}">${esc(t.priority)}</span>` : "\u2014";
-      return `<tr><td class="tname">${name}</td><td>${esc(t.site)}</td><td>${esc(t.list)}</td><td>${badge}</td><td>${due}</td><td>${pri}</td></tr>`;
+      return `<tr><td class="tname">${name} ${srcChip(t.source)}</td><td>${esc(t.site)}</td><td>${esc(t.list)}</td><td>${badge}</td><td>${due}</td><td>${pri}</td></tr>`;
     }).join("");
     box.innerHTML = `<div class="matrix" style="padding:4px 6px"><table class="ttable"><thead><tr><th>Task</th><th>Site</th><th>List</th><th>Status</th><th>Due</th><th>Priority</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   } catch (e) { box.innerHTML = '<div class="empty">Could not reach the server.</div>'; }
@@ -1540,6 +1546,8 @@ async function renderMyTasks() {
 // ---------- Task modal ----------
 let modalSiteId = null, modalFilter = "all";
 function fmtDue(ms) { return ms ? new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "\u2014"; }
+// Small tag telling which tool a task came from (sites can use ClickUp + Zoho together).
+function srcChip(source) { return source ? `<span class="src-chip src-${esc(source)}">${source === "zoho" ? "Zoho" : "ClickUp"}</span>` : ""; }
 async function openTasks(id) {
   modalSiteId = id; modalFilter = "all"; modalTasks = [];
   const site = latestData && latestData.sites[id];
@@ -1571,7 +1579,7 @@ function renderModal() {
     const pri = t.priority ? `<span style="color:${esc(t.priorityColor || "#8a96ad")}">${esc(t.priority)}</span>` : "\u2014";
     const due = `<span class="${t.overdue ? "due-late" : ""}">${fmtDue(t.dueMs)}</span>`;
     const who = t.assignees && t.assignees.length ? esc(t.assignees.join(", ")) : "\u2014";
-    return `<tr><td class="tname">${name}</td><td>${esc(t.list)}</td><td>${badge}</td><td>${who}</td><td>${due}</td><td>${pri}</td></tr>`;
+    return `<tr><td class="tname">${name} ${srcChip(t.source)}</td><td>${esc(t.list)}</td><td>${badge}</td><td>${who}</td><td>${due}</td><td>${pri}</td></tr>`;
   }).join("");
   document.getElementById("modal-body").innerHTML = tasks.length
     ? `<table class="ttable"><thead><tr><th>Task</th><th>List</th><th>Status</th><th>Assignee</th><th>Due</th><th>Priority</th></tr></thead><tbody>${rows}</tbody></table>`
@@ -1607,7 +1615,7 @@ const ICON = {
   moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>',
   monitor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M9 21h6M12 17v4"/></svg>',
 };
-const CICON = { https: ICON.lock, ssl: ICON.shield, cloudflare: ICON.cloud, ctm: ICON.phone, googleTag: ICON.code, pagespeed: ICON.gauge, plugins: ICON.download, clickup: ICON.checkSquare, security: ICON.shieldCheck };
+const CICON = { https: ICON.lock, ssl: ICON.shield, cloudflare: ICON.cloud, ctm: ICON.phone, googleTag: ICON.code, pagespeed: ICON.gauge, plugins: ICON.download, tasks: ICON.checkSquare, security: ICON.shieldCheck };
 
 // Swap icon placeholders in the nav/menu for real SVGs.
 function initIcons() {
@@ -1626,7 +1634,7 @@ boot();
 <div class="modal" id="modal" onclick="if(event.target===this)closeTasks()">
   <div class="modal-panel">
     <div class="modal-head">
-      <div><div class="modal-eyebrow">ClickUp tasks</div><h2 id="modal-title">Tasks</h2><div class="modal-count" id="modal-count"></div></div>
+      <div><div class="modal-eyebrow">Tasks</div><h2 id="modal-title">Tasks</h2><div class="modal-count" id="modal-count"></div></div>
       <button class="modal-x" onclick="closeTasks()" aria-label="Close">&times;</button>
     </div>
     <div class="modal-filters">
@@ -1644,8 +1652,10 @@ boot();
       <div class="field"><label>Name</label><input type="text" id="f-name" placeholder="Client name" /></div>
       <div class="field"><label>URL</label><input type="url" id="f-url" placeholder="https://example.com" /></div>
       <div class="field"><label>ClickUp List IDs (comma-separated)</label><input type="text" id="f-lists" placeholder="901bbb, 901ccc" /></div>
+      <div class="field"><label>Zoho Project IDs (comma-separated)</label><input type="text" id="f-zprojects" placeholder="17045000000012345" /></div>
       <div class="checks-row">
         <label class="chk"><input type="checkbox" id="f-cu" /> ClickUp enabled</label>
+        <label class="chk"><input type="checkbox" id="f-zo" /> Zoho enabled</label>
         <label class="chk"><input type="checkbox" id="f-cf" checked /> Expect Cloudflare</label>
         <label class="chk"><input type="checkbox" id="f-ctm" checked /> Expect CTM</label>
         <label class="chk"><input type="checkbox" id="f-gt" checked /> Expect Google Tag</label>

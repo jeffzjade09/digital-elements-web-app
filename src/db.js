@@ -78,6 +78,10 @@ function rowToSite(r) {
       folderId: r.clickup_folder_id || undefined,
       spaceId: r.clickup_space_id || undefined,
     },
+    zoho: {
+      enabled: r.zoho_enabled || false,
+      projectIds: r.zoho_project_ids || [],
+    },
   };
 }
 
@@ -104,14 +108,16 @@ export async function createWebsite(d, userId) {
     `insert into websites
       (name,url,helper_enabled,helper_endpoint,helper_token,
        expect_cloudflare,expect_ctm,expect_google_tag,
-       clickup_enabled,clickup_list_ids,clickup_folder_id,clickup_space_id,created_by,
+       clickup_enabled,clickup_list_ids,clickup_folder_id,clickup_space_id,
+       zoho_enabled,zoho_project_ids,created_by,
        license_key,license_expires_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      returning *`,
     [
       d.name, d.url, !!d.helper_enabled, d.helper_endpoint || null, d.helper_token || null,
       d.expect_cloudflare !== false, d.expect_ctm !== false, d.expect_google_tag !== false,
       !!d.clickup_enabled, d.clickup_list_ids || [], d.clickup_folder_id || null, d.clickup_space_id || null,
+      !!d.zoho_enabled, d.zoho_project_ids || [],
       userId || null, licenseKey, expiresAt,
     ]
   );
@@ -141,12 +147,14 @@ export async function updateWebsite(id, d) {
        name=$2,url=$3,helper_enabled=$4,helper_endpoint=$5,helper_token=$6,
        expect_cloudflare=$7,expect_ctm=$8,expect_google_tag=$9,
        clickup_enabled=$10,clickup_list_ids=$11,clickup_folder_id=$12,clickup_space_id=$13,
+       zoho_enabled=$14,zoho_project_ids=$15,
        updated_at=now()
      where id=$1 returning *`,
     [
       id, d.name, d.url, !!d.helper_enabled, d.helper_endpoint || null, d.helper_token || null,
       d.expect_cloudflare !== false, d.expect_ctm !== false, d.expect_google_tag !== false,
       !!d.clickup_enabled, d.clickup_list_ids || [], d.clickup_folder_id || null, d.clickup_space_id || null,
+      !!d.zoho_enabled, d.zoho_project_ids || [],
     ]
   );
   return rows[0] ? rowToSite(rows[0]) : null;
@@ -316,6 +324,10 @@ export async function bootstrap() {
 
   // Self-migrate: per-user theme preference.
   await query(`alter table app_users add column if not exists theme text not null default 'dark'`);
+
+  // Self-migrate: per-site Zoho Projects link (tasks can come from ClickUp, Zoho, or both).
+  await query(`alter table websites add column if not exists zoho_enabled boolean not null default false`);
+  await query(`alter table websites add column if not exists zoho_project_ids text[] not null default '{}'`);
 
   // Self-migrate: add per-site license columns if this DB predates them.
   await query(`alter table websites add column if not exists license_key text`);

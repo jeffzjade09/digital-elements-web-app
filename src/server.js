@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { loadSettings, loadResults, applyStoredSettings } from "./store.js";
 import { runOnce, startScheduler, isCheckRunning } from "./scheduler.js";
 import { getClickUpTasks } from "./checks/clickup.js";
+import { getZohoTasks } from "./checks/zoho.js";
 import {
   bootstrap, getWebsites, getWebsiteSite, createWebsite, updateWebsite, deleteWebsite,
   regenerateLicense, renewLicense,
@@ -166,23 +167,44 @@ app.post("/api/check", requireAuth, (req, res) => {
   runOnce(settings, { alert: false }).catch((err) => console.error("[server] On-demand check failed:", err.message));
 });
 
+// Fetch a site's tasks from every enabled tool (ClickUp and/or Zoho), tagged
+// with their source so the UI can tell them apart.
+async function fetchSiteTasks(site) {
+  const jobs = [];
+  if (site.clickup && site.clickup.enabled) {
+    jobs.push(getClickUpTasks(site.clickup, settings.clickup).then((r) => ({ source: "clickup", r })));
+  }
+  if (site.zoho && site.zoho.enabled) {
+    jobs.push(getZohoTasks(site.zoho, settings.zoho).then((r) => ({ source: "zoho", r })));
+  }
+  if (!jobs.length) return { ok: false, error: "No task tool linked to this site" };
+  const parts = await Promise.all(jobs);
+  const oks = parts.filter((p) => p.r.ok);
+  if (!oks.length) return { ok: false, error: parts.map((p) => p.r.error).filter(Boolean).join(" · ") || "No task data" };
+  const tasks = oks.flatMap((p) => (p.r.tasks || []).map((t) => ({ ...t, source: p.source })));
+  tasks.sort((a, b) => (a.done - b.done) || ((a.dueMs || Infinity) - (b.dueMs || Infinity)));
+  const warnings = parts.filter((p) => !p.r.ok).map((p) => `${p.source}: ${p.r.error}`);
+  return { ok: true, tasks, warnings };
+}
+
 app.get("/api/tasks/:siteId", requireAuth, async (req, res) => {
   try {
     const site = await getWebsiteSite(req.params.siteId);
     if (!site) return res.status(404).json({ ok: false, error: "Unknown site" });
-    res.json(await getClickUpTasks(site.clickup, settings.clickup));
+    res.json(await fetchSiteTasks(site));
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// Open ClickUp tasks assigned to the signed-in user (matched by email), across all sites.
+// Open tasks assigned to the signed-in user (matched by email) across all
+// sites and both task tools (ClickUp + Zoho).
 app.get("/api/my-tasks", requireAuth, async (req, res) => {
   const email = (req.user.email || "").toLowerCase();
   try {
-    const sites = (await getWebsites()).filter((s) => s.clickup && s.clickup.enabled);
+    const sites = (await getWebsites()).filter((s) => (s.clickup && s.clickup.enabled) || (s.zoho && s.zoho.enabled));
     const perSite = await Promise.all(sites.map(async (s) => {
-      const r = await getClickUpTasks(s.clickup, settings.clickup);
+      const r = await fetchSiteTasks(s);
       if (!r.ok) return [];
       return r.tasks
         .filter((t) => !t.done && (t.assigneeEmails || []).includes(email))
@@ -241,6 +263,8 @@ app.get("/api/websites", requireAuth, async (req, res) => {
 function normalizeWebsite(b) {
   let listIds = b.clickup_list_ids ?? b.clickupListIds ?? [];
   if (typeof listIds === "string") listIds = listIds.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  let zohoIds = b.zoho_project_ids ?? b.zohoProjectIds ?? [];
+  if (typeof zohoIds === "string") zohoIds = zohoIds.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
   return {
     name: (b.name || "").trim(),
     url: (b.url || "").trim(),
@@ -254,6 +278,8 @@ function normalizeWebsite(b) {
     clickup_list_ids: listIds,
     clickup_folder_id: b.clickup_folder_id || null,
     clickup_space_id: b.clickup_space_id || null,
+    zoho_enabled: !!b.zoho_enabled,
+    zoho_project_ids: zohoIds,
     license_duration: b.license_duration || "1y",
   };
 }
