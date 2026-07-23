@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 
 import { loadSettings, loadResults, applyStoredSettings } from "./store.js";
 import { runOnce, startScheduler, isCheckRunning } from "./scheduler.js";
-import { getClickUpTasks } from "./checks/clickup.js";
-import { getZohoTasks } from "./checks/zoho.js";
+import { getClickUpTasks, getClickUpStatuses, setClickUpTaskStatus, addClickUpComment } from "./checks/clickup.js";
+import { getZohoTasks, getZohoStatuses, setZohoTaskStatus, addZohoComment } from "./checks/zoho.js";
 import {
   bootstrap, getWebsites, getWebsiteSite, createWebsite, updateWebsite, deleteWebsite,
   regenerateLicense, renewLicense,
@@ -212,6 +212,65 @@ app.get("/api/my-tasks", requireAuth, async (req, res) => {
     }));
     const tasks = perSite.flat().sort((a, b) => (Number(b.overdue) - Number(a.overdue)) || ((a.dueMs || Infinity) - (b.dueMs || Infinity)));
     res.json({ ok: true, email, tasks });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// ---- Task actions: change status / add comment (any signed-in user) ----
+// Guard: the tool must be enabled on the site, and for Zoho the project must
+// be one of the site's linked projects.
+async function taskActionSite(req, res) {
+  const { siteId, source } = req.params;
+  if (!["clickup", "zoho"].includes(source)) { res.status(400).json({ ok: false, error: "Unknown task tool" }); return null; }
+  const site = await getWebsiteSite(siteId);
+  if (!site) { res.status(404).json({ ok: false, error: "Unknown site" }); return null; }
+  const enabled = source === "zoho" ? site.zoho && site.zoho.enabled : site.clickup && site.clickup.enabled;
+  if (!enabled) { res.status(400).json({ ok: false, error: `${source} isn't enabled for this site` }); return null; }
+  const ref = String((req.method === "GET" ? req.query.ref : req.body?.ref) || "");
+  if (!ref) { res.status(400).json({ ok: false, error: "ref (list/project id) required" }); return null; }
+  if (source === "zoho" && !site.zoho.projectIds.map(String).includes(ref)) {
+    res.status(400).json({ ok: false, error: "That Zoho project isn't linked to this site" }); return null;
+  }
+  return { site, ref };
+}
+
+app.get("/api/task-statuses/:siteId/:source", requireAuth, async (req, res) => {
+  try {
+    const ctx = await taskActionSite(req, res);
+    if (!ctx) return;
+    const r = req.params.source === "zoho"
+      ? await getZohoStatuses(settings.zoho, ctx.ref)
+      : await getClickUpStatuses(settings.clickup, ctx.ref);
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+app.post("/api/task-status/:siteId/:source/:taskId", requireAuth, async (req, res) => {
+  try {
+    const ctx = await taskActionSite(req, res);
+    if (!ctx) return;
+    const status = String(req.body?.status || "");
+    if (!status) return res.status(400).json({ ok: false, error: "status required" });
+    const r = req.params.source === "zoho"
+      ? await setZohoTaskStatus(settings.zoho, ctx.ref, req.params.taskId, status)
+      : await setClickUpTaskStatus(settings.clickup, req.params.taskId, status);
+    if (r.ok) console.log(`[tasks] ${req.user.email} set ${req.params.source} task ${req.params.taskId} -> ${status}`);
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+app.post("/api/task-comment/:siteId/:source/:taskId", requireAuth, async (req, res) => {
+  try {
+    const ctx = await taskActionSite(req, res);
+    if (!ctx) return;
+    const text = String(req.body?.text || "").trim().slice(0, 4000);
+    if (!text) return res.status(400).json({ ok: false, error: "Comment text required" });
+    // The API token posts as its owner, so attribute the real author in the body.
+    const content = `${req.user.name || req.user.email} (via DE Dashboard): ${text}`;
+    const r = req.params.source === "zoho"
+      ? await addZohoComment(settings.zoho, ctx.ref, req.params.taskId, content)
+      : await addClickUpComment(settings.clickup, req.params.taskId, content);
+    if (r.ok) console.log(`[tasks] ${req.user.email} commented on ${req.params.source} task ${req.params.taskId}`);
+    res.json(r);
   } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 

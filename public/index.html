@@ -250,6 +250,16 @@
   .due-late { color: var(--fail); }
   .src-chip { display: inline-block; font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 6px; margin-left: 6px; vertical-align: 1px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
   .src-chip.src-zoho { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, var(--line)); }
+  /* Task actions: status dropdown + comment */
+  .status-btn { border: 0; cursor: pointer; font-family: inherit; }
+  .status-btn:hover { filter: brightness(1.15); }
+  .status-menu { position: absolute; z-index: 200; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px; min-width: 170px; box-shadow: 0 10px 28px rgba(0,0,0,0.35); display: flex; flex-direction: column; gap: 2px; }
+  .status-menu .sm-opt { display: flex; align-items: center; gap: 9px; background: none; border: 0; color: var(--text); padding: 7px 10px; border-radius: 7px; font-size: 12.5px; cursor: pointer; text-align: left; font-family: inherit; }
+  .status-menu .sm-opt:hover { background: var(--panel-2); }
+  .status-menu .sm-loading { color: var(--muted); font-size: 12px; padding: 8px 10px; }
+  .act-btn { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 7px; padding: 4px 7px; cursor: pointer; display: inline-flex; align-items: center; }
+  .act-btn svg { width: 14px; height: 14px; }
+  .act-btn:hover { border-color: var(--accent); color: var(--text); }
 
   /* ---------- Responsive ---------- */
   @media (max-width: 900px) {
@@ -1533,13 +1543,12 @@ async function renderMyTasks() {
     if (!tasks.length) { box.innerHTML = `<div class="empty"><h3>No open tasks</h3><p>Nothing in ClickUp or Zoho is assigned to ${esc(j.email)} right now.</p></div>`; return; }
     meta.textContent = `${tasks.length} open task${tasks.length > 1 ? "s" : ""} assigned to ${j.email}`;
     const rows = tasks.map((t) => {
-      const badge = `<span class="badge" style="background:${esc(t.statusColor || "#5b6680")};color:#fff">${esc(t.status || "\u2014")}</span>`;
       const name = t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)}</a>` : esc(t.name);
       const due = `<span class="${t.overdue ? "due-late" : ""}">${fmtDue(t.dueMs)}</span>`;
       const pri = t.priority ? `<span style="color:${esc(t.priorityColor || "#8a96ad")}">${esc(t.priority)}</span>` : "\u2014";
-      return `<tr><td class="tname">${name} ${srcChip(t.source)}</td><td>${esc(t.site)}</td><td>${esc(t.list)}</td><td>${badge}</td><td>${due}</td><td>${pri}</td></tr>`;
+      return `<tr><td class="tname">${name} ${srcChip(t.source)}</td><td>${esc(t.site)}</td><td>${esc(t.list)}</td><td>${taskBadge(t, t.siteId)}</td><td>${due}</td><td>${pri}</td><td>${taskActions(t, t.siteId)}</td></tr>`;
     }).join("");
-    box.innerHTML = `<div class="matrix" style="padding:4px 6px"><table class="ttable"><thead><tr><th>Task</th><th>Site</th><th>List</th><th>Status</th><th>Due</th><th>Priority</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    box.innerHTML = `<div class="matrix" style="padding:4px 6px"><table class="ttable"><thead><tr><th>Task</th><th>Site</th><th>List</th><th>Status</th><th>Due</th><th>Priority</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   } catch (e) { box.innerHTML = '<div class="empty">Could not reach the server.</div>'; }
 }
 
@@ -1548,6 +1557,67 @@ let modalSiteId = null, modalFilter = "all";
 function fmtDue(ms) { return ms ? new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "\u2014"; }
 // Small tag telling which tool a task came from (sites can use ClickUp + Zoho together).
 function srcChip(source) { return source ? `<span class="src-chip src-${esc(source)}">${source === "zoho" ? "Zoho" : "ClickUp"}</span>` : ""; }
+
+// ---------- Task actions: change status / comment (pushed back to ClickUp/Zoho) ----------
+function taskRef(t) { return t.source === "zoho" ? (t.projectId || "") : (t.listId || ""); }
+function taskBadge(t, siteId) {
+  const ref = taskRef(t);
+  const style = `background:${esc(t.statusColor || "#5b6680")};color:#fff`;
+  if (!t.source || !t.id || !ref) return `<span class="badge" style="${style}">${esc(t.status || "—")}</span>`;
+  return `<button class="badge status-btn" style="${style}" title="Change status" onclick="openStatusMenu(event,'${esc(siteId)}','${esc(t.source)}','${esc(t.id)}','${esc(ref)}')">${esc(t.status || "—")} ▾</button>`;
+}
+function taskActions(t, siteId) {
+  const ref = taskRef(t);
+  if (!t.source || !t.id || !ref) return "";
+  return `<button class="act-btn" title="Add a comment in ${t.source === "zoho" ? "Zoho" : "ClickUp"}" onclick="commentTask('${esc(siteId)}','${esc(t.source)}','${esc(t.id)}','${esc(ref)}','${esc((t.name || "").replace(/'/g, ""))}')">${ICON.msg}</button>`;
+}
+let statusMenuEl = null;
+function closeStatusMenu() { if (statusMenuEl) { statusMenuEl.remove(); statusMenuEl = null; } }
+document.addEventListener("click", (e) => { if (statusMenuEl && !statusMenuEl.contains(e.target) && !e.target.closest(".status-btn")) closeStatusMenu(); });
+async function openStatusMenu(ev, siteId, source, taskId, ref) {
+  ev.stopPropagation();
+  closeStatusMenu();
+  const r = (ev.currentTarget || ev.target).getBoundingClientRect();
+  const menu = document.createElement("div");
+  menu.className = "status-menu";
+  menu.innerHTML = '<div class="sm-loading">Loading statuses…</div>';
+  menu.style.left = Math.max(8, Math.min(window.innerWidth - 190, r.left)) + "px";
+  menu.style.top = (r.bottom + 6 + window.scrollY) + "px";
+  document.body.appendChild(menu);
+  statusMenuEl = menu;
+  try {
+    const res = await fetch(`/api/task-statuses/${encodeURIComponent(siteId)}/${source}?ref=${encodeURIComponent(ref)}`);
+    const j = await res.json();
+    if (!j.ok) { menu.innerHTML = `<div class="sm-loading">${esc(j.error || "Could not load statuses")}</div>`; return; }
+    menu.innerHTML = (j.statuses || []).map((s) =>
+      `<button class="sm-opt" onclick="setTaskStatus('${esc(siteId)}','${source}','${esc(taskId)}','${esc(ref)}','${esc(s.id)}',this)"><span class="dot" style="background:${esc(s.color || "#8a96ad")}"></span>${esc(s.name)}</button>`).join("");
+  } catch (e) { menu.innerHTML = '<div class="sm-loading">Could not reach the server.</div>'; }
+}
+async function setTaskStatus(siteId, source, taskId, ref, status, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    const res = await fetch(`/api/task-status/${encodeURIComponent(siteId)}/${source}/${encodeURIComponent(taskId)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, ref }),
+    });
+    const j = await res.json();
+    if (!j.ok) { alert(j.error || "Could not update the status"); return; }
+    closeStatusMenu();
+    if (currentView === "mytasks") renderMyTasks();
+    if (modalSiteId) openTasks(modalSiteId);
+  } catch (e) { alert("Could not reach the server."); }
+  finally { closeStatusMenu(); }
+}
+async function commentTask(siteId, source, taskId, ref, taskName) {
+  const text = prompt(`Comment on “${taskName}” — posted to ${source === "zoho" ? "Zoho" : "ClickUp"} under your name:`);
+  if (!text || !text.trim()) return;
+  try {
+    const res = await fetch(`/api/task-comment/${encodeURIComponent(siteId)}/${source}/${encodeURIComponent(taskId)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, ref }),
+    });
+    const j = await res.json();
+    if (!j.ok) alert(j.error || "Could not post the comment");
+  } catch (e) { alert("Could not reach the server."); }
+}
 async function openTasks(id) {
   modalSiteId = id; modalFilter = "all"; modalTasks = [];
   const site = latestData && latestData.sites[id];
@@ -1574,15 +1644,14 @@ function renderModal() {
   document.getElementById("modal-count").textContent = `${all.length} total \u00b7 ${openCount} open` + (overdue ? ` \u00b7 ${overdue} overdue` : "");
   document.querySelectorAll(".mfilter").forEach((b) => b.classList.toggle("on", b.dataset.f === modalFilter));
   const rows = tasks.map((t) => {
-    const badge = `<span class="badge" style="background:${esc(t.statusColor || "#5b6680")}">${esc(t.status || "\u2014")}</span>`;
     const name = t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)}</a>` : esc(t.name);
     const pri = t.priority ? `<span style="color:${esc(t.priorityColor || "#8a96ad")}">${esc(t.priority)}</span>` : "\u2014";
     const due = `<span class="${t.overdue ? "due-late" : ""}">${fmtDue(t.dueMs)}</span>`;
     const who = t.assignees && t.assignees.length ? esc(t.assignees.join(", ")) : "\u2014";
-    return `<tr><td class="tname">${name} ${srcChip(t.source)}</td><td>${esc(t.list)}</td><td>${badge}</td><td>${who}</td><td>${due}</td><td>${pri}</td></tr>`;
+    return `<tr><td class="tname">${name} ${srcChip(t.source)}</td><td>${esc(t.list)}</td><td>${taskBadge(t, modalSiteId)}</td><td>${who}</td><td>${due}</td><td>${pri}</td><td>${taskActions(t, modalSiteId)}</td></tr>`;
   }).join("");
   document.getElementById("modal-body").innerHTML = tasks.length
-    ? `<table class="ttable"><thead><tr><th>Task</th><th>List</th><th>Status</th><th>Assignee</th><th>Due</th><th>Priority</th></tr></thead><tbody>${rows}</tbody></table>`
+    ? `<table class="ttable"><thead><tr><th>Task</th><th>List</th><th>Status</th><th>Assignee</th><th>Due</th><th>Priority</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
     : '<div class="empty" style="padding:40px">No tasks to show.</div>';
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeTasks(); closeWebsiteModal(); closeUsers(); } });
@@ -1614,6 +1683,7 @@ const ICON = {
   sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>',
   moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>',
   monitor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M9 21h6M12 17v4"/></svg>',
+  msg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H9l-5 4z"/></svg>',
 };
 const CICON = { https: ICON.lock, ssl: ICON.shield, cloudflare: ICON.cloud, ctm: ICON.phone, googleTag: ICON.code, pagespeed: ICON.gauge, plugins: ICON.download, tasks: ICON.checkSquare, security: ICON.shieldCheck };
 

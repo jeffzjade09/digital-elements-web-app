@@ -149,6 +149,7 @@ function mapTask(t, now) {
   const dueMs = t.due_date ? Number(t.due_date) : null;
   return {
     id: t.id,
+    listId: t.list?.id || null,
     name: t.name || "(untitled)",
     list: t.list?.name || "",
     status: t.status?.status || "",
@@ -164,6 +165,57 @@ function mapTask(t, now) {
     updatedMs: t.date_updated ? Number(t.date_updated) : null,
     url: t.url || `https://app.clickup.com/t/${t.id}`,
   };
+}
+
+/* ---- Write actions: status changes + comments ---- */
+
+async function clickupSend(path, token, method, body) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    return await fetch(API + path, {
+      method,
+      signal: controller.signal,
+      headers: { Authorization: token, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Valid statuses come from the task's list (each ClickUp list defines its own set).
+export async function getClickUpStatuses(settings, listId) {
+  if (!settings || !settings.token) return { ok: false, error: "ClickUp API token not set" };
+  try {
+    const res = await clickupGet(`/list/${encodeURIComponent(listId)}`, settings.token);
+    if (res.status === 401) return { ok: false, error: "ClickUp token rejected" };
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    const statuses = (data.statuses || []).map((s) => ({ id: s.status, name: s.status, color: s.color || null, type: s.type || "open" }));
+    if (!statuses.length) return { ok: false, error: "No statuses found for this ClickUp list" };
+    return { ok: true, statuses };
+  } catch (err) { return { ok: false, error: err.message }; }
+}
+
+export async function setClickUpTaskStatus(settings, taskId, statusName) {
+  if (!settings || !settings.token) return { ok: false, error: "ClickUp API token not set" };
+  try {
+    const res = await clickupSend(`/task/${encodeURIComponent(taskId)}`, settings.token, "PUT", { status: statusName });
+    if (res.status === 401) return { ok: false, error: "ClickUp token rejected" };
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) { return { ok: false, error: err.message }; }
+}
+
+export async function addClickUpComment(settings, taskId, text) {
+  if (!settings || !settings.token) return { ok: false, error: "ClickUp API token not set" };
+  try {
+    const res = await clickupSend(`/task/${encodeURIComponent(taskId)}/comment`, settings.token, "POST", { comment_text: text });
+    if (res.status === 401) return { ok: false, error: "ClickUp token rejected" };
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) { return { ok: false, error: err.message }; }
 }
 
 export async function getClickUpTasks(clickup, settings) {

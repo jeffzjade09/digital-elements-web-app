@@ -100,7 +100,11 @@ async function fetchProjectTasks(z, portalId, projectId) {
 }
 
 async function fetchAllTasks(z, portalId, projectIds) {
-  const perProject = await Promise.all(projectIds.map((id) => fetchProjectTasks(z, portalId, id)));
+  const perProject = await Promise.all(projectIds.map(async (id) => {
+    const tasks = await fetchProjectTasks(z, portalId, id);
+    tasks.forEach((t) => { t.__projectId = String(id); }); // needed for write actions
+    return tasks;
+  }));
   return perProject.flat();
 }
 
@@ -115,6 +119,7 @@ function mapTask(t, now, emailMap) {
   const pri = t.priority && t.priority !== "None" ? t.priority : null;
   return {
     id: String(t.id_string || t.id),
+    projectId: String(t.__projectId || ""),
     name: t.name || "(untitled)",
     list: (t.tasklist && t.tasklist.name) || "Tasks",
     status: (t.status && t.status.name) || "",
@@ -192,6 +197,66 @@ export async function checkZoho(zoho, settings) {
   } catch (err) {
     if (err.message === "AUTH") return { status: "fail", label: "Auth failed", detail: "Zoho token rejected — check client ID/secret/refresh token" };
     return { status: "warn", label: "No data", detail: err.name === "AbortError" ? "Zoho timed out" : err.message };
+  }
+}
+
+// ---- Write actions: status changes + comments ------------------------------
+// Requires a refresh token with ZohoProjects.tasks.ALL (covers UPDATE + CREATE).
+async function zohoPost(z, path, params) {
+  const token = await getAccessToken(z);
+  const res = await zfetch(`${apiBase(z.dc)}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Zoho-oauthtoken ${token}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+  });
+  if (res.status === 401) { tokenCache = { token: null, expires: 0 }; throw new Error("AUTH"); }
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const b = await res.json(); if (b && b.error && b.error.message) msg = b.error.message; } catch {}
+    if (res.status === 403) msg += " — the Zoho token may lack write scope (regenerate with ZohoProjects.tasks.ALL)";
+    throw new Error(msg);
+  }
+  return res.json().catch(() => ({}));
+}
+
+// Valid statuses for a project (from its task layout), cached 10 minutes.
+const statusCache = new Map(); // projectId -> { list, ts }
+
+export async function getZohoStatuses(settings, projectId) {
+  if (!configured(settings)) return { ok: false, error: "Zoho API credentials not set" };
+  const hit = statusCache.get(String(projectId));
+  if (hit && Date.now() - hit.ts < 600000) return { ok: true, statuses: hit.list };
+  try {
+    const portal = await resolvePortal(settings);
+    const data = await zohoGet(settings, `/restapi/portal/${portal.id}/projects/${encodeURIComponent(projectId)}/tasklayouts`);
+    const list = ((data && data.status_details) || []).map((s) => ({ id: String(s.id), name: s.name, color: s.color || null, type: s.type || "open" }));
+    if (!list.length) return { ok: false, error: "No statuses found for this Zoho project" };
+    statusCache.set(String(projectId), { list, ts: Date.now() });
+    return { ok: true, statuses: list };
+  } catch (err) {
+    return { ok: false, error: err.message === "AUTH" ? "Zoho token rejected" : err.message };
+  }
+}
+
+export async function setZohoTaskStatus(settings, projectId, taskId, statusId) {
+  if (!configured(settings)) return { ok: false, error: "Zoho API credentials not set" };
+  try {
+    const portal = await resolvePortal(settings);
+    await zohoPost(settings, `/restapi/portal/${portal.id}/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/`, { custom_status: String(statusId) });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message === "AUTH" ? "Zoho token rejected" : err.message };
+  }
+}
+
+export async function addZohoComment(settings, projectId, taskId, content) {
+  if (!configured(settings)) return { ok: false, error: "Zoho API credentials not set" };
+  try {
+    const portal = await resolvePortal(settings);
+    await zohoPost(settings, `/restapi/portal/${portal.id}/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/comments/`, { content });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message === "AUTH" ? "Zoho token rejected" : err.message };
   }
 }
 
