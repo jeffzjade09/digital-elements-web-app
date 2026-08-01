@@ -64,10 +64,12 @@ export function isCheckRunning() {
 
 // Tick every few seconds and sweep when the configured interval has elapsed.
 // Reading the interval live means Settings changes take effect without a restart.
+let tickTimer = null;
+
 export function startScheduler(settings) {
   let lastSweep = 0;
   let lastCleanup = 0;
-  setInterval(() => {
+  tickTimer = setInterval(() => {
     // Daily retention prune (0 = keep forever). Runs on the first tick after boot.
     if (Date.now() - lastCleanup >= 86400000) {
       lastCleanup = Date.now();
@@ -86,4 +88,10 @@ export function startScheduler(settings) {
     );
   }, 5000);
   console.log(`[scheduler] Sweep active (every ${Math.max(15, settings.sweepIntervalSeconds || 60)}s, adjustable from Settings)`);
+}
+
+// Stop scheduling new sweeps. An in-flight sweep keeps running — callers should
+// poll isCheckRunning() before exiting so its results.json write completes.
+export function stopScheduler() {
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
 }

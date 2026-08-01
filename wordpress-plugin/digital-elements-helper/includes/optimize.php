@@ -201,11 +201,28 @@ function deheled_optimize_remove_transients() {
         if (delete_site_transient(substr($opt, strlen('_site_transient_')))) $removed++;
     }
 
-    // Sweep up any orphaned timeout rows left behind (value without a pair).
-    $orphans = (int) $wpdb->query($wpdb->prepare(
-        "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
-        $tt_like, $stt_like
-    ));
+    // Sweep up genuinely orphaned timeout rows — a _transient_timeout_X with no
+    // surviving _transient_X value row. Deleting timeout rows unconditionally
+    // would strip the expiry from any transient that outlived the loop above and
+    // make it permanent, which is the opposite of what this cleanup is for.
+    // delete_option() rather than a raw DELETE so the options cache is updated.
+    $orphan_sql = "SELECT tt.option_name
+                     FROM {$wpdb->options} tt
+                     LEFT JOIN {$wpdb->options} v
+                            ON v.option_name = CONCAT(%s, SUBSTRING(tt.option_name, %d))
+                    WHERE tt.option_name LIKE %s
+                      AND v.option_id IS NULL";
+    $orphans = 0;
+    $pairs = array(
+        array('_transient_',      strlen('_transient_timeout_') + 1,      $tt_like),
+        array('_site_transient_', strlen('_site_transient_timeout_') + 1, $stt_like),
+    );
+    foreach ($pairs as $pair) {
+        $stale = $wpdb->get_col($wpdb->prepare($orphan_sql, $pair[0], $pair[1], $pair[2]));
+        foreach ($stale as $opt) {
+            if (delete_option($opt)) $orphans++;
+        }
+    }
 
     $after = (int) $wpdb->get_var($wpdb->prepare($count_sql, $t_like, $tt_like, $st_like, $stt_like));
 

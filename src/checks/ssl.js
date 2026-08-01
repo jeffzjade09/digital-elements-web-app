@@ -19,10 +19,16 @@ export function checkSsl(rawUrl, warnDays = 14) {
     }
 
     const port = url.port || 443;
+    // rejectUnauthorized: false so the handshake completes even when the cert is
+    // untrusted — otherwise an *expired* cert aborts the connection and we report
+    // a generic "TLS error", which is exactly the case this check exists to catch.
+    // Trust is then evaluated explicitly via socket.authorized below.
     const socket = tls.connect(
-      { host: url.hostname, port, servername: url.hostname, timeout: TIMEOUT_MS },
+      { host: url.hostname, port, servername: url.hostname, timeout: TIMEOUT_MS, rejectUnauthorized: false },
       () => {
         const cert = socket.getPeerCertificate();
+        const authorized = socket.authorized;
+        const authError = socket.authorizationError;
         socket.end();
 
         if (!cert || !cert.valid_to) {
@@ -36,6 +42,11 @@ export function checkSsl(rawUrl, warnDays = 14) {
 
         if (daysRemaining < 0) {
           resolve({ status: "fail", label: "Expired", detail, daysRemaining });
+        } else if (!authorized) {
+          // Valid dates but the chain or hostname doesn't check out — a browser
+          // would still show a full-page warning, so this is a failure.
+          const reason = String(authError || "certificate not trusted");
+          resolve({ status: "fail", label: "Untrusted cert", detail: `${detail} · ${reason}`, daysRemaining });
         } else if (daysRemaining < warnDays) {
           resolve({ status: "warn", label: `${daysRemaining}d left`, detail, daysRemaining });
         } else {

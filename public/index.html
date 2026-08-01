@@ -611,7 +611,19 @@ let resultsTimer = null, websitesTimer = null, currentView = "dashboard";
 let ME = { user: null, perms: {} };
 const openRows = new Set();
 const detailCache = {}; // siteId -> { social, hist } rendered HTML, survives board re-renders
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// For values interpolated into a single-quoted JS string inside an onclick
+// attribute. HTML entity decoding runs BEFORE the attribute is parsed as JS, so
+// esc() alone is not enough there — &#39; decodes back to ' and still ends the
+// literal. Backslash-escape first, then HTML-escape, so the post-decode text is
+// a valid JS string. Needed because task titles and ClickUp status names are
+// free text ("Won't Fix").
+const escJs = (s) => esc(
+  String(s == null ? "" : s)
+    .replace(/[\\']/g, "\\$&")
+    .replace(/[\r\n\u2028\u2029]/g, " ")
+);
 
 // ---------- Theme ----------
 let THEME = (() => { try { return localStorage.getItem("theme") || "dark"; } catch (e) { return "dark"; } })();
@@ -1067,7 +1079,7 @@ function renderWebsitesList() {
       ${statusBadge(overall)}
       <div class="wl-actions">
         ${canManage ? `<button class="btn sm" onclick="editWebsite('${w.id}')">Edit</button>` : ""}
-        ${canDelete ? `<button class="btn sm danger" onclick="deleteWebsite('${w.id}','${esc((w.name || "").replace(/'/g, ""))}')">Delete</button>` : ""}
+        ${canDelete ? `<button class="btn sm danger" onclick="deleteWebsite('${escJs(w.id)}','${escJs(w.name)}')">Delete</button>` : ""}
       </div></div>`;
   }).join("");
 }
@@ -1077,7 +1089,7 @@ function incompleteReasons(w) {
   const r = [];
   if (!w.helper || !w.helper.enabled) r.push("Updates not set up (no helper plugin)");
   else if (w.license && w.license.expired) r.push("Monitoring license expired");
-  else if (!w.helper.endpoint || !w.helper.token) r.push("Helper endpoint or token missing");
+  else if (!w.helper.endpoint || !w.helper.tokenSet) r.push("Helper endpoint or token missing");
   if (w.clickup && w.clickup.enabled && (!w.clickup.listIds || !w.clickup.listIds.length)) r.push("ClickUp enabled but no List IDs");
   if (w.zoho && w.zoho.enabled && (!w.zoho.projectIds || !w.zoho.projectIds.length)) r.push("Zoho enabled but no Project IDs");
   return r;
@@ -1267,7 +1279,7 @@ function renderLanding() {
         <div class="lp-main"><span class="lp-name">${esc(p.name)}</span><span class="wl-url">${esc(p.url)}</span></div>
         <div class="lp-chips">${chip(r, "https", "HTTPS")}${chip(r, "ssl", "SSL")}${chip(r, "pagespeed", "PS")}</div>
         ${statusBadge(overall)}
-        ${canManage ? `<div class="wl-actions"><button class="btn sm" onclick="editLanding('${p.id}')">Edit</button><button class="btn sm danger" onclick="deleteLanding('${p.id}','${esc((p.name || "").replace(/'/g, ""))}')">Delete</button></div>` : ""}
+        ${canManage ? `<div class="wl-actions"><button class="btn sm" onclick="editLanding('${p.id}')">Edit</button><button class="btn sm danger" onclick="deleteLanding('${escJs(p.id)}','${escJs(p.name)}')">Delete</button></div>` : ""}
       </div>`;
     }).join("") : '<div class="lp-empty">No landing pages yet.</div>';
     return `<div class="lp-group"><div class="lp-group-head"><span>${esc(w.name)}</span>${canManage ? `<button class="btn sm" onclick="openLandingModal(null,'${w.id}')">+ Add</button>` : ""}</div>${rows}</div>`;
@@ -1363,7 +1375,7 @@ async function renderUsers() {
     const opts = Object.keys(ROLE_LABELS).map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("");
     return `<div class="urow"><div class="uinfo">${esc(u.name || u.email)}<small>${esc(u.email)}</small></div>
       <div style="display:flex;gap:8px;align-items:center"><select onchange="changeUserRole('${u.id}', this.value, this)">${opts}</select>
-      <button class="linkx" onclick="removeUser('${u.id}','${esc(u.email)}')">Remove</button></div></div>`;
+      <button class="linkx" onclick="removeUser('${escJs(u.id)}','${escJs(u.email)}')">Remove</button></div></div>`;
   }).join("") || '<div class="empty">No users yet.</div>';
 }
 async function addUser() {
@@ -1626,12 +1638,12 @@ function taskBadge(t, siteId) {
   const ref = taskRef(t);
   const style = `background:${esc(t.statusColor || "#5b6680")};color:#fff`;
   if (!t.source || !t.id || !ref) return `<span class="badge" style="${style}">${esc(t.status || "—")}</span>`;
-  return `<button class="badge status-btn" style="${style}" title="Change status" onclick="openStatusMenu(event,'${esc(siteId)}','${esc(t.source)}','${esc(t.id)}','${esc(ref)}')">${esc(t.status || "—")} ▾</button>`;
+  return `<button class="badge status-btn" style="${style}" title="Change status" onclick="openStatusMenu(event,'${escJs(siteId)}','${escJs(t.source)}','${escJs(t.id)}','${escJs(ref)}')">${esc(t.status || "—")} ▾</button>`;
 }
 function taskActions(t, siteId) {
   const ref = taskRef(t);
   if (!t.source || !t.id || !ref) return "";
-  return `<button class="act-btn" title="Add a comment in ${t.source === "zoho" ? "Zoho" : "ClickUp"}" onclick="commentTask('${esc(siteId)}','${esc(t.source)}','${esc(t.id)}','${esc(ref)}','${esc((t.name || "").replace(/'/g, ""))}')">${ICON.msg}</button>`;
+  return `<button class="act-btn" title="Add a comment in ${t.source === "zoho" ? "Zoho" : "ClickUp"}" onclick="commentTask('${escJs(siteId)}','${escJs(t.source)}','${escJs(t.id)}','${escJs(ref)}','${escJs(t.name)}')">${ICON.msg}</button>`;
 }
 let statusMenuEl = null;
 function closeStatusMenu() { if (statusMenuEl) { statusMenuEl.remove(); statusMenuEl = null; } }
@@ -1652,7 +1664,7 @@ async function openStatusMenu(ev, siteId, source, taskId, ref) {
     const j = await res.json();
     if (!j.ok) { menu.innerHTML = `<div class="sm-loading">${esc(j.error || "Could not load statuses")}</div>`; return; }
     menu.innerHTML = (j.statuses || []).map((s) =>
-      `<button class="sm-opt" onclick="setTaskStatus('${esc(siteId)}','${source}','${esc(taskId)}','${esc(ref)}','${esc(s.id)}',this)"><span class="dot" style="background:${esc(s.color || "#8a96ad")}"></span>${esc(s.name)}</button>`).join("");
+      `<button class="sm-opt" onclick="setTaskStatus('${escJs(siteId)}','${escJs(source)}','${escJs(taskId)}','${escJs(ref)}','${escJs(s.id)}',this)"><span class="dot" style="background:${esc(s.color || "#8a96ad")}"></span>${esc(s.name)}</button>`).join("");
   } catch (e) { menu.innerHTML = '<div class="sm-loading">Could not reach the server.</div>'; }
 }
 async function setTaskStatus(siteId, source, taskId, ref, status, btn) {

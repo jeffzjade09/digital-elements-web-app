@@ -90,7 +90,19 @@ export function loadResults() {
   }
 }
 
+// Write to a sibling temp file and rename over the target, so a crash or a
+// redeploy mid-write can't leave a truncated results.json behind. A corrupt read
+// falls back to the empty document, which makes the next sweep treat every check
+// as newly changed and fire an alert for all of them.
 export function saveResults(results) {
-  fs.mkdirSync(path.dirname(RESULTS_PATH), { recursive: true });
-  fs.writeFileSync(RESULTS_PATH, JSON.stringify(results, null, 2));
+  const dir = path.dirname(RESULTS_PATH);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.results.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(results, null, 2));
+    fs.renameSync(tmp, RESULTS_PATH);
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    throw err;
+  }
 }

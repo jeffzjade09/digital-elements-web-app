@@ -9,7 +9,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { loadSettings, loadResults, applyStoredSettings } from "./store.js";
-import { runOnce, startScheduler, isCheckRunning } from "./scheduler.js";
+import { runOnce, startScheduler, stopScheduler, isCheckRunning } from "./scheduler.js";
 import { getClickUpTasks, getClickUpStatuses, setClickUpTaskStatus, addClickUpComment } from "./checks/clickup.js";
 import { getZohoTasks, getZohoStatuses, setZohoTaskStatus, addZohoComment } from "./checks/zoho.js";
 import {
@@ -20,9 +20,10 @@ import {
   getLandingPages, createLandingPage, updateLandingPage, deleteLandingPage,
   getAppSettings, setAppSettings, updateUserTheme,
   getStatusEvents, getMetricSamples, computeUptime,
-  getWebsiteByLicense,
+  getWebsiteByLicense, getPool,
 } from "./db.js";
 import { configureAuth, requireAuth, requirePerm, sameOriginOnly, permsFor } from "./auth.js";
+import { rateLimit } from "./rateLimit.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, "..", "public");
@@ -55,7 +56,7 @@ app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 // Public license check for the helper plugin (the key itself is the secret;
 // a valid GET returns only the site name + expiry, nothing else).
-app.get("/api/license/validate", async (req, res) => {
+app.get("/api/license/validate", rateLimit({ name: "license", max: 30 }), async (req, res) => {
   const key = String(req.query.key || "").trim();
   if (!/^DEG-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/i.test(key)) {
     return res.json({ ok: true, valid: false });
@@ -82,7 +83,7 @@ function pluginVersion() {
     return m ? m[1] : "0";
   } catch { return "0"; }
 }
-app.get("/api/plugin/manifest", (req, res) => {
+app.get("/api/plugin/manifest", rateLimit({ name: "manifest", max: 60 }), (req, res) => {
   let lastUpdated = null;
   try { lastUpdated = fs.statSync(PLUGIN_ZIP).mtime.toISOString().slice(0, 10); } catch {}
   let changelog = "";
@@ -104,7 +105,7 @@ app.get("/api/plugin/manifest", (req, res) => {
     changelog,
   });
 });
-app.get("/api/plugin/download", (req, res) => {
+app.get("/api/plugin/download", rateLimit({ name: "download", max: 20 }), (req, res) => {
   res.download(PLUGIN_ZIP, "digital-elements-helper.zip", (err) => {
     if (err && !res.headersSent) res.status(404).json({ ok: false, error: "package not found" });
   });
@@ -112,7 +113,7 @@ app.get("/api/plugin/download", (req, res) => {
 
 // History for the helper plugin, authenticated by license key (same trust
 // model as /api/license/validate — the key is the shared secret).
-app.get("/api/plugin/history", async (req, res) => {
+app.get("/api/plugin/history", rateLimit({ name: "history", max: 30 }), async (req, res) => {
   const key = String(req.query.key || "").trim();
   if (!/^DEG-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/i.test(key)) {
     return res.status(403).json({ ok: false, error: "invalid key" });
@@ -284,8 +285,8 @@ const OPTIMIZE_ACTIONS = {
 
 app.post("/api/optimize/:siteId/:action", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
   const action = req.params.action;
-  const path = OPTIMIZE_ACTIONS[action];
-  if (!path) return res.status(400).json({ ok: false, error: "Unknown optimization" });
+  const actionPath = OPTIMIZE_ACTIONS[action]; // not `path` — that shadows the node:path import
+  if (!actionPath) return res.status(400).json({ ok: false, error: "Unknown optimization" });
   try {
     const site = await getWebsiteSite(req.params.siteId);
     if (!site) return res.status(404).json({ ok: false, error: "Unknown site" });
@@ -297,7 +298,7 @@ app.post("/api/optimize/:siteId/:action", requireAuth, requirePerm("manageWebsit
     }
     // helper.endpoint is the .../wpmonitor/v1/status URL — swap the trailing segment.
     const base = site.helper.endpoint.replace(/\/status\/?$/, "");
-    const url = `${base}/${path}`;
+    const url = `${base}/${actionPath}`;
     const r = await fetch(url, {
       method: "POST",
       headers: {
@@ -351,13 +352,24 @@ app.get("/api/analytics/:siteId", requireAuth, async (req, res) => {
 });
 
 // ---- Websites (view: all; add/edit: manageWebsites; delete: deleteWebsite) ----
+// The license key doubles as the helper plugin's API bearer token, so it must be
+// stripped from both `license.key` and `helper.token` before leaving the server.
+// The dashboard only ever tests the token for presence, so it gets `tokenSet`
+// instead and the secret never reaches a browser.
+function websiteView(w, canManage) {
+  const out = { ...w };
+  if (w.helper) {
+    const { token, ...helper } = w.helper;
+    out.helper = { ...helper, tokenSet: !!token };
+  }
+  if (w.license && !canManage) out.license = { ...w.license, key: null };
+  return out;
+}
+
 app.get("/api/websites", requireAuth, async (req, res) => {
   try {
-    const websites = await getWebsites();
-    // Only users who manage websites see the raw license key.
-    if (!permsFor(req.user.role).manageWebsites) {
-      websites.forEach((w) => { if (w.license) w.license = { ...w.license, key: null }; });
-    }
+    const canManage = !!permsFor(req.user.role).manageWebsites;
+    const websites = (await getWebsites()).map((w) => websiteView(w, canManage));
     res.json({ ok: true, websites });
   }
   catch (err) { res.status(500).json({ ok: false, error: err.message }); }
@@ -393,7 +405,7 @@ app.post("/api/websites", requireAuth, requirePerm("manageWebsites"), async (req
   try {
     const website = await createWebsite(d, req.user.id);
     console.log(`[websites] created "${website.name}" (${website.id})`);
-    res.json({ ok: true, website });
+    res.json({ ok: true, website: websiteView(website, true) });
   }
   catch (err) { console.error("[websites] create failed:", err.message); res.status(500).json({ ok: false, error: err.message }); }
 });
@@ -404,7 +416,7 @@ app.put("/api/websites/:id", requireAuth, requirePerm("manageWebsites"), async (
   try {
     const w = await updateWebsite(req.params.id, d);
     if (!w) return res.status(404).json({ ok: false, error: "Not found" });
-    res.json({ ok: true, website: w });
+    res.json({ ok: true, website: websiteView(w, true) });
   } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
@@ -422,7 +434,7 @@ app.post("/api/websites/:id/license", requireAuth, requirePerm("manageWebsites")
       : await renewLicense(req.params.id, duration);
     if (!website) return res.status(404).json({ ok: false, error: "Not found" });
     console.log(`[websites] license ${action} for ${req.params.id}`);
-    res.json({ ok: true, website });
+    res.json({ ok: true, website: websiteView(website, true) });
   } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
@@ -540,7 +552,7 @@ app.put("/api/settings", requireAuth, requirePerm("manageSettings"), async (req,
 bootstrap()
   .then(async () => {
     try { applyStoredSettings(settings, await getAppSettings()); } catch (err) { console.error("[server] Could not load stored settings:", err.message); }
-    app.listen(settings.port, () => {
+    const server = app.listen(settings.port, () => {
       console.log(`\n  Digital Elements Site Monitor at ${settings.publicUrl}\n`);
       startScheduler(settings);
       if (settings.checkOnStart) {
@@ -548,6 +560,26 @@ bootstrap()
         runOnce(settings, { alert: false }).catch((err) => console.error("[server] Startup check failed:", err.message));
       }
     });
+
+    // Stop scheduling, stop accepting connections, then wait for an in-flight
+    // sweep to finish writing results.json before exiting. Without this, a
+    // redeploy can kill the process mid-write.
+    let shuttingDown = false;
+    const shutdown = async (signal) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`[server] ${signal} received — shutting down…`);
+      stopScheduler();
+      server.close();
+      const deadline = Date.now() + 20000;
+      while (isCheckRunning() && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (isCheckRunning()) console.warn("[server] Sweep still running at deadline — exiting anyway.");
+      try { await getPool().end(); } catch {}
+      process.exit(0);
+    };
+    for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => { shutdown(sig); });
   })
   .catch((err) => {
     console.error("[server] Database bootstrap failed:", err.message);
