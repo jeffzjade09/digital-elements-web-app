@@ -274,6 +274,8 @@
   .opt-line .opt-ok { color: var(--ok); font-weight: 700; }
   .opt-line .opt-dim { color: var(--muted); font-weight: 700; }
   .opt-when { margin-top: 5px; color: var(--muted); font-size: 11px; font-family: var(--mono); }
+  /* Indented sample rows under an image-audit finding. */
+  .opt-sub { padding: 1px 0 1px 16px; color: var(--muted); font-size: 11px; font-family: var(--mono); overflow-wrap: anywhere; }
 
   /* ---------- Responsive ---------- */
   @media (max-width: 900px) {
@@ -830,6 +832,7 @@ function renderSiteDetailShell() {
 const OPTIMIZE_ACTIONS = [
   { key: "clear-cache", label: "Clear cache", desc: "Flush page, object and plugin caches. Safe — rebuilds automatically." },
   { key: "remove-transients", label: "Remove transients", desc: "Clear all transients and orphaned rows from the database. Safe — regenerated on demand." },
+  { key: "optimize-images", label: "Scan images", desc: "Audit the media library for oversized images, large files and missing WebP. Read-only — reports findings, changes nothing." },
 ];
 function fillOptimize() {
   const box = document.getElementById("sd-optimize");
@@ -841,6 +844,52 @@ function fillOptimize() {
       <div class="opt-result" id="opt-result-${a.key}"></div>
     </div>`).join("");
 }
+// Extra detail for the image audit: the estimated total, the worst offenders,
+// and an explicit note when the scan only covered part of the library. Returns
+// "" for every other action so the generic layers renderer is unaffected.
+const fmtBytes = (n) => {
+  n = Number(n) || 0;
+  if (n <= 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), u.length - 1);
+  const v = n / Math.pow(1024, i);
+  return (i === 0 ? String(n) : v.toFixed(v < 10 ? 1 : 0)) + " " + u[i];
+};
+function renderImageAudit(r) {
+  const im = r && r.images;
+  if (!im) return "";
+  const parts = [];
+
+  if (im.est_total_bytes > 0) {
+    parts.push(`<div class="opt-line"><span class="opt-ok">≈</span> <b>Estimated recoverable</b> — ${esc(fmtBytes(im.est_total_bytes))} of ${esc(fmtBytes(im.total_bytes))}</div>`);
+  }
+
+  // Never let a partial scan read as a complete one.
+  if (im.partial) {
+    const why = im.timed_out ? "the 12s time budget was reached" : "the 5,000 image cap was reached";
+    parts.push(`<div class="opt-line"><span class="opt-dim">!</span> Partial scan — ${esc(String(im.scanned))} of ${esc(String(im.candidates))} images checked (${esc(why)}). Counts above cover only what was scanned.</div>`);
+  }
+
+  const sample = (title, rows, showSaved) => {
+    if (!rows || !rows.length) return "";
+    const li = rows.map((s) => {
+      const size = fmtBytes(s.bytes);
+      const dims = s.width && s.height ? ` · ${esc(String(s.width))}×${esc(String(s.height))}` : "";
+      const saved = showSaved && s.est_saved ? ` · ~${esc(fmtBytes(s.est_saved))} recoverable` : "";
+      return `<div class="opt-sub">${esc(s.file)} — ${esc(size)}${dims}${saved}</div>`;
+    }).join("");
+    return `<div class="opt-line"><b>${esc(title)}</b></div>${li}`;
+  };
+
+  parts.push(sample("Largest oversized", im.oversized && im.oversized.samples, true));
+  parts.push(sample("Largest files", im.large && im.large.samples, false));
+
+  if (r.cached) parts.push(`<div class="opt-line"><span class="opt-dim">•</span> Cached result — use Scan images again after 12h, or it will refresh automatically.</div>`);
+  parts.push(`<div class="opt-line"><span class="opt-dim">•</span> Read-only audit. Savings are estimates from image dimensions and typical WebP ratios, not measured re-encodes.</div>`);
+
+  return parts.filter(Boolean).join("");
+}
+
 async function runOptimize(action, btn) {
   const out = document.getElementById("opt-result-" + action);
   const label = btn.textContent;
@@ -861,7 +910,7 @@ async function runOptimize(action, btn) {
           const cls = l.status === "verified" ? "opt-ok" : "opt-dim";
           return `<div class="opt-line"><span class="${cls}">${mark}</span> <b>${esc(l.name)}</b>${l.detail ? ` — ${esc(l.detail)}` : ""}</div>`;
         }).join("");
-        out.innerHTML = rows + (when ? `<div class="opt-when">Verified at ${esc(when)}</div>` : "");
+        out.innerHTML = rows + renderImageAudit(r) + (when ? `<div class="opt-when">Verified at ${esc(when)}</div>` : "");
       } else {
         const cleared = r.cleared || [];
         out.textContent = cleared.length ? "Cleared: " + cleared.join(", ") : (r.skipped && r.skipped.join(", ")) || "Done — nothing to clear";

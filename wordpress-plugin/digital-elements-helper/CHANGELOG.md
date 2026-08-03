@@ -1,5 +1,18 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.4.0
+- New optimization: "Scan images" — audits the media library and reports images
+  stored far wider than they are ever rendered, files over 500 KB, and JPEG/PNGs
+  with no WebP version, along with an estimated recoverable size for each.
+  READ-ONLY: no file is resized, re-encoded, converted, or deleted. Savings are
+  estimates from pixel area and typical WebP ratios, not measured re-encodes.
+  The scan is bounded by both an item cap (5,000) and a 12-second budget, and
+  says so explicitly when either one cuts it short rather than silently
+  reporting a partial library as complete. Results are cached for 12 hours;
+  `?fresh=1` forces a rescan. Thresholds are filterable
+  (`deheled_images_large_bytes`, `deheled_images_max_items`,
+  `deheled_images_budget_ms`, `deheled_images_cache_ttl`).
+
 ## 2.3.2
 - New optimization: "Remove transients" — clears all transients (not just
   expired) and sweeps orphaned timeout rows from the options table, freeing

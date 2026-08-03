@@ -281,6 +281,8 @@ app.post("/api/task-comment/:siteId/:source/:taskId", requireAuth, async (req, r
 const OPTIMIZE_ACTIONS = {
   "clear-cache": "optimize/clear-cache",
   "remove-transients": "optimize/remove-transients",
+  // Read-only audit — reports what could be improved, changes nothing (helper v2.4+).
+  "optimize-images": "optimize/images",
 };
 
 app.post("/api/optimize/:siteId/:action", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
@@ -308,7 +310,11 @@ app.post("/api/optimize/:siteId/:action", requireAuth, requirePerm("manageWebsit
       },
       signal: AbortSignal.timeout(30000),
     });
-    if (r.status === 404) return res.status(400).json({ ok: false, error: "Update the helper plugin to v2.3+ to use optimizations" });
+    if (r.status === 404) {
+      // Each action landed in a different helper release, so name the one needed.
+      const since = { "optimize-images": "2.4" }[action] || "2.3";
+      return res.status(400).json({ ok: false, error: `Update the helper plugin to v${since}+ to use this optimization` });
+    }
     if (r.status === 401 || r.status === 403) return res.status(400).json({ ok: false, error: "Token rejected by the helper plugin" });
     if (!r.ok) return res.status(502).json({ ok: false, error: `Helper returned HTTP ${r.status}` });
     const data = await r.json();

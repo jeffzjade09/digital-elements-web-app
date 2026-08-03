@@ -17,4 +17,5 @@ delete_transient('deheled_status_cache');
 delete_site_transient('deheled_update_manifest');
 delete_option('deheled_security_result');
 delete_option('deheled_license_status');
+delete_option('deheled_images_result');   // cached image audit — derived data
 wp_clear_scheduled_hook('deheled_security_scan_event');
