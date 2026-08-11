@@ -8,8 +8,11 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { installFetchCounter, getStats, getSiteStats, getSiteSeries, getSiteRequests } from "./metrics.js";
+installFetchCounter(); // wrap global fetch before any check module runs
+
 import { loadSettings, loadResults, applyStoredSettings } from "./store.js";
-import { runOnce, startScheduler, stopScheduler, isCheckRunning } from "./scheduler.js";
+import { runOnce, runSingle, startScheduler, stopScheduler, isCheckRunning, seedRequestMetrics, persistRequestMetrics } from "./scheduler.js";
 import { getClickUpTasks, getClickUpStatuses, setClickUpTaskStatus, addClickUpComment } from "./checks/clickup.js";
 import { getZohoTasks, getZohoStatuses, setZohoTaskStatus, addZohoComment } from "./checks/zoho.js";
 import {
@@ -19,7 +22,7 @@ import {
   getSocialLinks, addSocialLink, deleteSocialLink,
   getLandingPages, createLandingPage, updateLandingPage, deleteLandingPage,
   getAppSettings, setAppSettings, updateUserTheme,
-  getStatusEvents, getMetricSamples, computeUptime,
+  getMetricSamples, computeUptime,
   getWebsiteByLicense, getPool,
 } from "./db.js";
 import { configureAuth, requireAuth, requirePerm, sameOriginOnly, permsFor } from "./auth.js";
@@ -124,12 +127,11 @@ app.get("/api/plugin/history", rateLimit({ name: "history", max: 30 }), async (r
     if (!lic) return res.status(403).json({ ok: false, error: "invalid key" });
     if (lic.expired) return res.status(403).json({ ok: false, error: "license expired" });
     const days = Math.min(90, Math.max(1, Math.round(Number(req.query.days) || 30)));
-    const [events, samples, uptime] = await Promise.all([
-      getStatusEvents(lic.id, 10),
+    const [samples, uptime] = await Promise.all([
       getMetricSamples(lic.id, days),
       computeUptime(lic.id, days),
     ]);
-    res.json({ ok: true, days, uptime, events, samples });
+    res.json({ ok: true, days, uptime, samples });
   } catch (err) {
     res.status(500).json({ ok: false, error: "lookup failed" });
   }
@@ -163,10 +165,32 @@ app.get("/api/results", requireAuth, (req, res) => {
   res.json(results);
 });
 
+// Per-site outbound traffic: how many requests the web app is making to THIS
+// WordPress site (plugin API vs core homepage fetch), with an hourly trend.
+app.get("/api/site-traffic/:siteId", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
+  const hours = Math.max(1, Math.min(336, Math.round(Number(req.query.hours) || 24)));
+  try {
+    const site = await getWebsiteSite(req.params.siteId);
+    if (!site) return res.status(404).json({ ok: false, error: "Unknown site" });
+    let host = "";
+    try { host = new URL(/^https?:\/\//i.test(site.url) ? site.url : "https://" + site.url).host; } catch {}
+    res.json({ ok: true, hours, host, stats: getSiteStats(host), series: getSiteSeries(host, hours), requests: getSiteRequests(host, 50) });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
 app.post("/api/check", requireAuth, (req, res) => {
   if (isCheckRunning()) return res.json({ started: false, running: true });
   res.json({ started: true });
   runOnce(settings, { alert: false }).catch((err) => console.error("[server] On-demand check failed:", err.message));
+});
+
+// Check a single site — used when a site is added/edited so we don't re-sweep
+// all of them. Outbound requests hit only that one site.
+app.post("/api/check/:siteId", requireAuth, async (req, res) => {
+  try {
+    const r = await runSingle(req.params.siteId, settings);
+    res.json(r.ok ? { ok: true, started: true } : { ok: false, error: r.error || "Failed" });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // Fetch a site's tasks from every enabled tool (ClickUp and/or Zoho), tagged
@@ -330,16 +354,15 @@ app.post("/api/optimize/:siteId/:action", requireAuth, requirePerm("manageWebsit
   }
 });
 
-// Per-site history: uptime %, recent status changes, and metric samples for trends.
+// Per-site history: uptime % and metric samples for the trend charts.
 app.get("/api/history/:siteId", requireAuth, async (req, res) => {
   const days = clamp(req.query.days || 30, 1, 90);
   try {
-    const [events, samples, uptime] = await Promise.all([
-      getStatusEvents(req.params.siteId, 25),
+    const [samples, uptime] = await Promise.all([
       getMetricSamples(req.params.siteId, days),
       computeUptime(req.params.siteId, days),
     ]);
-    res.json({ ok: true, days, uptime, events, samples });
+    res.json({ ok: true, days, uptime, samples });
   } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
@@ -529,11 +552,16 @@ app.delete("/api/landing/:id", requireAuth, requirePerm("manageWebsites"), async
 
 // ---- Settings (admin only) ----
 function settingsView() {
+  const results = loadResults();
   return {
     pagespeedIntervalSeconds: Math.round((settings.pageSpeed.minIntervalMs || 120000) / 1000),
-    sweepIntervalSeconds: settings.sweepIntervalSeconds || 60,
+    sweepIntervalSeconds: settings.sweepIntervalSeconds || 3600,
     sslWarnDays: settings.sslWarnDays || 14,
     historyRetentionDays: settings.historyRetentionDays ?? 180,
+    autoChecks: settings.autoChecks !== false, // false = manual-only
+    usage: getStats(),                    // outbound-request counters
+    lastSweep: results.sweep || null,     // { durationMs, requests, sites }
+    lastRun: results.lastRun || null,
   };
 }
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n) || 0)));
@@ -545,12 +573,13 @@ app.put("/api/settings", requireAuth, requirePerm("manageSettings"), async (req,
   const b = req.body || {};
   const toStore = {};
   if (b.pagespeedIntervalSeconds != null) toStore.pagespeed_interval_seconds = String(clamp(b.pagespeedIntervalSeconds, 60, 604800)); // up to 7 days
-  if (b.sweepIntervalSeconds != null) toStore.sweep_interval_seconds = String(clamp(b.sweepIntervalSeconds, 15, 3600));
+  if (b.sweepIntervalSeconds != null) toStore.sweep_interval_seconds = String(clamp(b.sweepIntervalSeconds, 15, 432000)); // up to 5 days
   if (b.sslWarnDays != null) toStore.ssl_warn_days = String(clamp(b.sslWarnDays, 1, 90));
   if (b.historyRetentionDays != null) {
     const n = Math.round(Number(b.historyRetentionDays) || 0);
     toStore.history_retention_days = String(n <= 0 ? 0 : Math.min(730, Math.max(30, n)));
   }
+  if (b.autoChecks != null) toStore.auto_checks = b.autoChecks ? "1" : "0";
   try {
     await setAppSettings(toStore);
     applyStoredSettings(settings, toStore); // takes effect on the next sweep/tick
@@ -563,12 +592,18 @@ app.put("/api/settings", requireAuth, requirePerm("manageSettings"), async (req,
 bootstrap()
   .then(async () => {
     try { applyStoredSettings(settings, await getAppSettings()); } catch (err) { console.error("[server] Could not load stored settings:", err.message); }
+    await seedRequestMetrics(); // restore request-metric buckets from the DB
     const server = app.listen(settings.port, () => {
       console.log(`\n  Digital Elements Site Monitor at ${settings.publicUrl}\n`);
       startScheduler(settings);
-      if (settings.checkOnStart) {
-        console.log("[server] Running initial check on startup…");
+      // Only sweep on boot if we have no results yet (cold start). Avoids a full
+      // outbound sweep of every site on every Railway redeploy.
+      const cold = !loadResults().lastRun;
+      if (settings.checkOnStart && cold) {
+        console.log("[server] Cold start — running initial check…");
         runOnce(settings, { alert: false }).catch((err) => console.error("[server] Startup check failed:", err.message));
+      } else {
+        console.log("[server] Existing results found — skipping startup sweep (next runs on schedule).");
       }
     });
 
@@ -587,6 +622,7 @@ bootstrap()
         await new Promise((r) => setTimeout(r, 250));
       }
       if (isCheckRunning()) console.warn("[server] Sweep still running at deadline — exiting anyway.");
+      try { await persistRequestMetrics(); } catch {} // persist final request-metric buckets
       try { await getPool().end(); } catch {}
       process.exit(0);
     };

@@ -33,6 +33,7 @@ export function applyStoredSettings(settings, stored) {
   if (stored.sweep_interval_seconds) settings.sweepIntervalSeconds = Number(stored.sweep_interval_seconds);
   if (stored.ssl_warn_days) settings.sslWarnDays = Number(stored.ssl_warn_days);
   if (stored.history_retention_days !== undefined && stored.history_retention_days !== "") settings.historyRetentionDays = Number(stored.history_retention_days);
+  if (stored.auto_checks !== undefined && stored.auto_checks !== "") settings.autoChecks = stored.auto_checks === "1" || stored.auto_checks === "true";
 }
 
 export function loadSettings() {
@@ -47,7 +48,8 @@ export function loadSettings() {
       fail: num(process.env.PAGESPEED_FAIL, 50),
       minIntervalMs: num(process.env.PAGESPEED_MIN_INTERVAL_SECONDS, 120) * 1000,
     },
-    sweepIntervalSeconds: num(process.env.SWEEP_INTERVAL_SECONDS, 60),
+    sweepIntervalSeconds: num(process.env.SWEEP_INTERVAL_SECONDS, 3600),
+    autoChecks: bool(process.env.AUTO_CHECKS, true), // false = manual-only (Run Checks)
     sslWarnDays: num(process.env.SSL_WARN_DAYS, 14),
     historyRetentionDays: num(process.env.HISTORY_RETENTION_DAYS, 180),
     publicUrl: (process.env.PUBLIC_URL || `http://localhost:${num(process.env.PORT, 4000)}`).replace(/\/$/, ""),
@@ -88,6 +90,19 @@ export function loadResults() {
   } catch {
     return { lastRun: null, running: false, sites: {} };
   }
+}
+
+// PageSpeed cache persisted to disk so the (7-day) refresh interval survives
+// app restarts/redeploys instead of re-bursting every site on every boot.
+const PS_CACHE_PATH = path.join(DATA_DIR, "pagespeed-cache.json");
+export function loadPsCache() {
+  try { return JSON.parse(fs.readFileSync(PS_CACHE_PATH, "utf8")); } catch { return {}; }
+}
+export function savePsCache(obj) {
+  try {
+    fs.mkdirSync(path.dirname(PS_CACHE_PATH), { recursive: true });
+    fs.writeFileSync(PS_CACHE_PATH, JSON.stringify(obj));
+  } catch (err) { console.error("[store] Could not persist PageSpeed cache:", err.message); }
 }
 
 // Write to a sibling temp file and rename over the target, so a crash or a
