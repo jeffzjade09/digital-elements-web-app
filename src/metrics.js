@@ -179,6 +179,25 @@ export function getSiteRequests(hostInput, limit = 50) {
     at: new Date(e.ts).toISOString(), method: e.method, path: e.path, cat: e.cat, status: e.status,
   }));
 }
+// Totals per host over the last `hours` hours (for the dashboard rollup).
+// Returns { host: { plugin, core, external } } for hosts with any activity.
+export function getHostTotals(hours = 24) {
+  const h = Math.max(1, Math.min(336, Math.round(hours)));
+  const cutoff = Math.floor(Date.now() / HOUR) * HOUR - (h - 1) * HOUR;
+  const out = {};
+  for (const host of Object.keys(hosts)) {
+    let plugin = 0, core = 0, external = 0;
+    const hb = hosts[host];
+    for (const k of Object.keys(hb)) {
+      if (Number(k) < cutoff) continue;
+      const b = hb[k];
+      plugin += b.plugin || 0; core += b.core || 0; external += b.external || 0;
+    }
+    if (plugin || core || external) out[host] = { plugin, core, external };
+  }
+  return out;
+}
+
 // Hourly plugin/core series for one site's host, oldest→newest, zero-filled.
 export function getSiteSeries(hostInput, hours = 24) {
   const host = normHost(hostInput);
