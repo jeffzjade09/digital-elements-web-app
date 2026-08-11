@@ -333,6 +333,14 @@ export async function pruneRequestMetrics(days) {
   return rowCount;
 }
 
+// Durable "have we ever completed a sweep?" signal. Used instead of the
+// ephemeral results.json so a Railway redeploy doesn't look like a cold start
+// (which would force a full startup sweep on every deploy).
+export async function hasMetricHistory() {
+  const { rows } = await query("select 1 from metric_samples limit 1");
+  return rows.length > 0;
+}
+
 // ---- Startup: bootstrap admins + migrate sites.json ------------------------
 export async function bootstrap() {
   // Ensure schema essentials exist (idempotent) in case SQL wasn't run.
