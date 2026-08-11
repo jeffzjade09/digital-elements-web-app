@@ -22,7 +22,7 @@ import {
   getSocialLinks, addSocialLink, deleteSocialLink,
   getLandingPages, createLandingPage, updateLandingPage, deleteLandingPage,
   getAppSettings, setAppSettings, updateUserTheme,
-  getMetricSamples, computeUptime,
+  getMetricSamples, computeUptime, hasMetricHistory,
   getWebsiteByLicense, getPool,
 } from "./db.js";
 import { configureAuth, requireAuth, requirePerm, sameOriginOnly, permsFor } from "./auth.js";
@@ -615,17 +615,19 @@ bootstrap()
   .then(async () => {
     try { applyStoredSettings(settings, await getAppSettings()); } catch (err) { console.error("[server] Could not load stored settings:", err.message); }
     await seedRequestMetrics(); // restore request-metric buckets from the DB
+    // Cold start = the DATABASE has no sweep history (durable across redeploys),
+    // NOT the ephemeral results.json — otherwise every Railway redeploy would
+    // look "cold" and force a full startup sweep.
+    let cold = true;
+    try { cold = !(await hasMetricHistory()); } catch (err) { console.error("[server] Cold-start check failed:", err.message); }
     const server = app.listen(settings.port, () => {
       console.log(`\n  Digital Elements Site Monitor at ${settings.publicUrl}\n`);
       startScheduler(settings);
-      // Only sweep on boot if we have no results yet (cold start). Avoids a full
-      // outbound sweep of every site on every Railway redeploy.
-      const cold = !loadResults().lastRun;
       if (settings.checkOnStart && cold) {
-        console.log("[server] Cold start — running initial check…");
+        console.log("[server] Cold start (empty history) — running initial check…");
         runOnce(settings, { alert: false }).catch((err) => console.error("[server] Startup check failed:", err.message));
       } else {
-        console.log("[server] Existing results found — skipping startup sweep (next runs on schedule).");
+        console.log("[server] Existing history found — skipping startup sweep (next runs on schedule).");
       }
     });
 
