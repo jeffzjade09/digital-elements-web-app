@@ -258,21 +258,11 @@ export async function setAppSettings(obj) {
 }
 
 // ---- History: status transitions + periodic metric samples ----------------
-export async function recordStatusEvent(websiteId, from, to) {
-  await query("insert into status_events (website_id, from_status, to_status) values ($1,$2,$3)", [websiteId, from || null, to || null]);
-}
 export async function recordMetricSample(websiteId, m) {
   await query(
     "insert into metric_samples (website_id, overall, pagespeed, ssl_days, response_ms) values ($1,$2,$3,$4,$5)",
     [websiteId, m.overall || null, m.pagespeed ?? null, m.sslDays ?? null, m.responseMs ?? null]
   );
-}
-export async function getStatusEvents(websiteId, limit = 25) {
-  const { rows } = await query(
-    "select from_status, to_status, at from status_events where website_id=$1 order by at desc limit $2",
-    [websiteId, limit]
-  );
-  return rows.map((r) => ({ from: r.from_status, to: r.to_status, at: r.at }));
 }
 export async function getMetricSamples(websiteId, days = 30) {
   const startIso = new Date(Date.now() - days * 86400000).toISOString();
@@ -282,23 +272,18 @@ export async function getMetricSamples(websiteId, days = 30) {
   );
   return rows.map((r) => ({ overall: r.overall, pagespeed: r.pagespeed, sslDays: r.ssl_days, responseMs: r.response_ms, at: r.at }));
 }
-// Percentage of the window the site was NOT failing, derived from status transitions.
+// Percentage of the window the site was NOT failing, derived from the recorded
+// metric samples (share of samples whose overall status wasn't "fail").
 export async function computeUptime(websiteId, days = 30) {
-  const now = Date.now();
-  const start = now - days * 86400000;
-  const startIso = new Date(start).toISOString();
-  const before = await query("select to_status from status_events where website_id=$1 and at <= $2 order by at desc limit 1", [websiteId, startIso]);
-  const evs = await query("select to_status, extract(epoch from at)*1000 as ms from status_events where website_id=$1 and at > $2 order by at asc", [websiteId, startIso]);
-  if (!before.rows.length && !evs.rows.length) return null; // no data yet
-  let cur = before.rows[0]?.to_status || "ok";
-  let downtime = 0, cursor = start;
-  for (const e of evs.rows) {
-    const t = Number(e.ms);
-    if (cur === "fail") downtime += t - cursor;
-    cursor = t; cur = e.to_status;
-  }
-  if (cur === "fail") downtime += now - cursor;
-  return Math.round(Math.max(0, Math.min(100, (1 - downtime / (now - start)) * 100)) * 100) / 100;
+  const startIso = new Date(Date.now() - days * 86400000).toISOString();
+  const { rows } = await query(
+    "select count(*)::int total, count(*) filter (where overall = 'fail')::int failed from metric_samples where website_id=$1 and at >= $2",
+    [websiteId, startIso]
+  );
+  const total = rows[0]?.total || 0;
+  if (!total) return null; // no samples yet
+  const failed = rows[0]?.failed || 0;
+  return Math.round(((total - failed) / total) * 10000) / 100;
 }
 // License validation lookup (used by the helper plugin's public check).
 export async function getWebsiteByLicense(key) {
@@ -310,10 +295,41 @@ export async function getWebsiteByLicense(key) {
   return { id: rows[0].id, name: rows[0].name, expiresAt: exp ? exp.toISOString() : null, expired, daysLeft };
 }
 
-// Retention: prune trend samples older than N days. status_events are tiny and
-// kept indefinitely (they back uptime), so only metric_samples are pruned.
+// Retention: prune trend samples older than N days (they back the trend charts
+// and uptime %). status_events are no longer recorded or read.
 export async function deleteOldMetricSamples(days) {
   const { rowCount } = await query("delete from metric_samples where at < now() - ($1 * interval '1 day')", [days]);
+  return rowCount;
+}
+
+// ---- Request metrics (per host per hour) ----------------------------------
+// Upsert absolute hourly counts. Buckets only ever increase within an hour, so
+// last-writer-wins with the current value is correct and idempotent.
+export async function upsertRequestMetrics(entries) {
+  if (!entries || !entries.length) return 0;
+  let n = 0;
+  for (const e of entries) {
+    await query(
+      `insert into request_metrics (host, hour, plugin, core, external)
+       values ($1, to_timestamp($2/1000.0), $3, $4, $5)
+       on conflict (host, hour) do update set
+         plugin = excluded.plugin, core = excluded.core, external = excluded.external`,
+      [e.host, e.hour, e.plugin || 0, e.core || 0, e.external || 0]
+    );
+    n++;
+  }
+  return n;
+}
+// Recent rows (for seeding the in-memory buckets on boot).
+export async function getRequestMetrics(sinceMs) {
+  const { rows } = await query(
+    "select host, (extract(epoch from hour)*1000)::bigint ms, plugin, core, external from request_metrics where hour >= to_timestamp($1/1000.0)",
+    [sinceMs]
+  );
+  return rows.map((r) => ({ host: r.host, hour: Number(r.ms), plugin: r.plugin, core: r.core, external: r.external }));
+}
+export async function pruneRequestMetrics(days) {
+  const { rowCount } = await query("delete from request_metrics where hour < now() - ($1 * interval '1 day')", [days]);
   return rowCount;
 }
 
@@ -365,6 +381,13 @@ export async function bootstrap() {
     overall text, pagespeed int, ssl_days int, response_ms int,
     at timestamptz not null default now())`);
   await query(`create index if not exists metric_samples_site_at_idx on metric_samples(website_id, at)`);
+
+  // Per-host outbound request counts, one row per host per hour (durable trend).
+  await query(`create table if not exists request_metrics (
+    host text not null, hour timestamptz not null,
+    plugin int not null default 0, core int not null default 0, external int not null default 0,
+    primary key (host, hour))`);
+  await query(`create index if not exists request_metrics_hour_idx on request_metrics(hour)`);
 
   // Seed admin emails from env so someone can log in the first time.
   const admins = (process.env.ADMIN_EMAILS || "")

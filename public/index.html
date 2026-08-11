@@ -274,6 +274,65 @@
   .opt-line .opt-ok { color: var(--ok); font-weight: 700; }
   .opt-line .opt-dim { color: var(--muted); font-weight: 700; }
   .opt-when { margin-top: 5px; color: var(--muted); font-size: 11px; font-family: var(--mono); }
+  /* PageSpeed status + usage counter */
+  .ps-status { margin-top: 10px; font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+  .ps-status.warn { color: var(--warn); }
+  .ps-status.bad { color: var(--fail); }
+  .usage-box { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .usage-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .usage-grid > div { display: flex; flex-direction: column; gap: 2px; }
+  .usage-grid .ub-n { font-family: var(--display); font-weight: 700; font-size: 22px; }
+  .usage-grid .ub-n.ub-plugin { color: var(--accent); }
+  .usage-grid .ub-l { color: var(--muted); font-size: 11px; }
+  .ub-sub { color: var(--faint); font-size: 10.5px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 7px; }
+  .ub-foot { margin-top: 10px; color: var(--faint); font-size: 11px; font-family: var(--mono); }
+  /* Traffic view */
+  .tf-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .tf-cards.tf-cards-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 720px) { .tf-cards, .tf-cards.tf-cards-3 { grid-template-columns: repeat(2, 1fr); } }
+  .tf-card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 16px 18px; border-left: 3px solid var(--line); }
+  .tf-card.wp { border-left-color: var(--ok); }
+  .tf-card.plugin { border-left-color: var(--accent); }
+  .tf-card.core { border-left-color: var(--info); }
+  .tf-card.ext { border-left-color: var(--faint); }
+  .tf-card .tf-n { font-family: var(--display); font-weight: 700; font-size: 30px; line-height: 1; }
+  .tf-card .tf-l { font-weight: 600; margin-top: 8px; font-size: 13px; }
+  .tf-card .tf-s { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .tf-legend { display: flex; gap: 18px; margin: 4px 0 12px; font-size: 12px; color: var(--muted); }
+  .tf-legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .tf-legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .tf-split { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: stretch; margin-top: 8px; }
+  @media (max-width: 760px) { .tf-split { grid-template-columns: 1fr; } }
+  .tf-panel { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 12px; padding: 14px 16px; }
+  .tf-panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .tf-sub { color: var(--faint); font-size: 10.5px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+  .dn-wrap { display: flex; align-items: center; gap: 16px; }
+  .dn-svg { flex: none; }
+  .dn-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 30px 0; line-height: 1.5; }
+  .dn-total { fill: var(--text); font-family: var(--display); font-weight: 700; font-size: 26px; }
+  .dn-cap { fill: var(--muted); font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .dn-legend { display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1; }
+  .dn-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .dn-l { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dn-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .dn-v { margin-left: auto; font-family: var(--display); font-weight: 700; font-size: 15px; display: flex; align-items: baseline; gap: 6px; }
+  .dn-v em { font-style: normal; font-family: var(--body); font-weight: 500; font-size: 11px; color: var(--muted); }
+  .cx-lbl { fill: var(--faint); font-size: 10px; font-family: var(--mono); }
+  /* Clickable endpoint paths + info modal */
+  .ep-link { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .ep-link:hover { text-decoration: underline; }
+  .ep-i { font-family: var(--body); margin-left: 5px; opacity: 0.6; font-size: 11px; }
+  .th-hint { font-family: var(--body); font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--faint); font-size: 10.5px; }
+  #ep-body .ep-what { color: var(--text); font-size: 13.5px; line-height: 1.55; margin: 0 0 14px; }
+  #ep-body .ep-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  #ep-body .ep-meta span { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; font-size: 12px; color: var(--muted); }
+  #ep-body .ep-meta b { color: var(--text); font-weight: 600; margin-right: 7px; font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  #ep-body .ep-h { margin: 0 0 8px; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  #ep-body .ep-list { list-style: none; margin: 0 0 16px; padding: 0; }
+  #ep-body .ep-list li { position: relative; padding: 6px 0 6px 20px; font-size: 13px; line-height: 1.45; border-top: 1px solid var(--line-soft); }
+  #ep-body .ep-list li:first-child { border-top: 0; }
+  #ep-body .ep-list li::before { content: ""; position: absolute; left: 4px; top: 13px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  #ep-body .ep-note { background: color-mix(in srgb, var(--info) 10%, transparent); border: 1px solid color-mix(in srgb, var(--info) 30%, transparent); border-radius: 9px; padding: 11px 13px; font-size: 12.5px; line-height: 1.5; color: var(--text); }
   /* Indented sample rows under an image-audit finding. */
   .opt-sub { padding: 1px 0 1px 16px; color: var(--muted); font-size: 11px; font-family: var(--mono); overflow-wrap: anywhere; }
 
@@ -606,9 +665,18 @@
             </div>
           </div>
           <div class="set-field">
+            <label><input type="checkbox" id="set-auto" style="width:auto;vertical-align:-2px;margin-right:6px" /> Automatic checks</label>
+            <div class="hint">When on, the dashboard runs outbound checks on the schedule below. Turn <strong>off</strong> for manual-only — nothing hits your WordPress sites unless someone clicks “Run checks” (automatic down/expiry alerts pause).</div>
+          </div>
+          <div class="set-field">
             <label>Check frequency</label>
-            <div class="hint">How often the dashboard runs the lightweight checks (HTTPS, SSL, Cloudflare, tracking, updates, tasks).</div>
-            <select id="set-sweep"><option value="30">Every 30 seconds</option><option value="60">Every minute</option><option value="120">Every 2 minutes</option><option value="300">Every 5 minutes</option></select>
+            <div class="hint">How often the dashboard runs the outbound checks (HTTPS, SSL, Cloudflare, tracking, updates, tasks) against every site. Lower frequency = less load on your host. Hourly is recommended. (Ignored when Automatic checks is off.)</div>
+            <select id="set-sweep"><option value="900">Every 15 minutes</option><option value="3600">Every hour (recommended)</option><option value="21600">Every 6 hours</option><option value="43200">Every 12 hours</option><option value="86400">Every 1 day</option><option value="172800">Every 2 days</option><option value="259200">Every 3 days</option><option value="432000">Every 5 days</option></select>
+          </div>
+          <div class="set-field">
+            <label>Outbound request usage</label>
+            <div class="hint">Backend requests this dashboard makes to your sites and APIs — watch this against your hosting limits.</div>
+            <div id="usageBox" class="usage-box">Loading…</div>
           </div>
           <div class="set-field">
             <label>SSL expiry warning</label>
@@ -697,29 +765,47 @@ async function setTheme(pref) {
   }
 }
 
-// ---------- Data loading + live polling ----------
+// ---------- Data loading + visibility-aware polling ----------
+// To keep backend load low (WP Engine flagged tight polling): poll fast only
+// while a check is actively running, poll slowly when idle, and pause entirely
+// when the browser tab is hidden. /api/results only reads a cached file \u2014 it
+// never triggers outbound site checks \u2014 so this just controls refresh rate.
+const POLL_RUNNING_MS = 2500;
+const POLL_IDLE_MS = 60000;
+let lastWebsitesRefresh = 0;
+function scheduleResults(ms) { clearTimeout(resultsTimer); resultsTimer = setTimeout(load, ms); }
 async function load() {
+  if (document.hidden) return; // never poll a hidden tab; visibilitychange resumes
   try {
     const res = await fetch("/api/results");
     const data = await res.json();
     render(data);
-    scheduleResults(data.running ? 2500 : 15000);
+    // The websites list rarely changes \u2014 refresh it at most every 5 min while idle.
+    if (!data.running && Date.now() - lastWebsitesRefresh > 300000) {
+      lastWebsitesRefresh = Date.now();
+      refreshWebsites().then(() => render(latestData || { sites: {} }));
+    }
+    scheduleResults(data.running ? POLL_RUNNING_MS : POLL_IDLE_MS);
     const btn = document.getElementById("runBtn");
     if (!data.running && btn.dataset.busy === "1") { btn.dataset.busy = "0"; btn.disabled = false; btn.innerHTML = ICON.run + " Run checks"; }
   } catch (e) {
     document.getElementById("board").innerHTML = '<div class="empty"><h3>Can\u2019t reach the server</h3><p>Check that the app is still running, then reload.</p></div>';
+    scheduleResults(POLL_IDLE_MS); // back off on error rather than hammering
   }
 }
-function scheduleResults(ms) { clearInterval(resultsTimer); resultsTimer = setInterval(load, ms); }
 function startLive() {
-  scheduleResults(15000);
-  clearInterval(websitesTimer);
-  websitesTimer = setInterval(async () => { await refreshWebsites(); render(latestData || { sites: {} }); }, 20000);
+  lastWebsitesRefresh = Date.now();
+  scheduleResults(POLL_IDLE_MS);
 }
+// Pause polling when the tab is backgrounded; refresh immediately on return.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { clearTimeout(resultsTimer); }
+  else { load(); }
+});
 async function runChecks() {
   const btn = document.getElementById("runBtn");
   btn.disabled = true; btn.dataset.busy = "1"; btn.innerHTML = '<span class="spinner"></span> Running';
-  try { await fetch("/api/check", { method: "POST" }); scheduleResults(2500); }
+  try { await fetch("/api/check", { method: "POST" }); scheduleResults(POLL_RUNNING_MS); }
   catch (e) { btn.disabled = false; btn.dataset.busy = "0"; btn.innerHTML = ICON.run + " Run checks"; }
 }
 
@@ -816,6 +902,7 @@ function openSiteDetail(id, push = true) {
   loadDetailHistory(id);
   loadAnalytics(id);
   loadSocial(id);
+  if (ME.perms.manageWebsites) loadSiteTraffic(id);
 }
 function closeSiteDetail() { showView("dashboard"); }
 window.addEventListener("popstate", () => {
@@ -860,7 +947,7 @@ function renderSiteDetailShell() {
       <div class="sdp"><h3><span class="ci">${ICON.users}</span>Social links</h3><div id="social-${esc(currentSiteId)}">${skel(80)}</div></div>
     </div>
     ${ME.perms.manageWebsites ? `<div class="sdp" style="margin-bottom:16px"><h3><span class="ci">${ICON.gauge}</span>Optimization</h3><div id="sd-optimize"></div></div>` : ""}
-    <div class="sdp" style="margin-bottom:16px"><h3><span class="ci">${ICON.layers}</span>Recent Check History</h3><div id="sd-history">${skel(140)}</div></div>`;
+    ${ME.perms.manageWebsites ? `<div class="sdp" style="margin-bottom:16px"><h3 style="display:flex;align-items:center;gap:10px"><span class="ci">${ICON.gauge}</span>Requests to this site<span class="hranges" id="st-ranges" style="margin-left:auto"><button class="hrange on" data-h="24" onclick="setSiteTrafficRange(24)">24h</button><button class="hrange" data-h="168" onclick="setSiteTrafficRange(168)">7d</button></span></h3><div id="sd-traffic"><div class="empty-sm">Loading…</div></div></div>` : ""}`;
   fillOptimize();
 }
 
@@ -1138,10 +1225,26 @@ function fillUpdates(ck) {
   box.innerHTML = rows.map((r) => `<div class="upd-item"><span>${esc(r.name)}<span class="kind">${r.kind}</span></span><span class="ver">${esc(r.ver)}</span></div>`).join("");
 }
 
+// A "last run / next run" + stale/error line so a cached or failed PageSpeed
+// score is never shown as if it were fresh.
+function psStatusLine(ck) {
+  const ran = ck.psRanAt ? new Date(ck.psRanAt) : null;
+  const next = ck.psNextAt ? new Date(ck.psNextAt) : null;
+  const bits = [];
+  bits.push(ran ? `Last run ${relTime(ck.psRanAt)}` : "Not run yet");
+  if (next) bits.push(next.getTime() > Date.now() ? `next ~${next.toLocaleDateString([], { month: "short", day: "numeric" })}` : "refresh due");
+  let cls = "ps-status", tag = "";
+  if (ck.psError) { cls += " bad"; tag = ` · ⚠ last attempt failed: ${esc(ck.psError)}`; }
+  else if (ck.psStale) { cls += " warn"; tag = " · showing previous score"; }
+  return `<div class="${cls}">${esc(bits.join(" · "))}${tag}</div>`;
+}
 function fillPsDetail(ck) {
   const box = document.getElementById("sd-psdetail");
   const score = psScoreOf(ck);
-  if (ck.status === "skip" || score == null) { box.innerHTML = '<div class="empty-sm">No PageSpeed data yet — it appears after the first PageSpeed run (they’re throttled, so give it a minute).</div>'; return; }
+  if (ck.status === "skip" || score == null) {
+    box.innerHTML = (ck.psError ? `<div class="empty-sm">PageSpeed couldn’t run: ${esc(ck.psError)}</div>` : '<div class="empty-sm">No PageSpeed data yet — it appears after the first PageSpeed run (they’re throttled, so give it a minute).</div>') + psStatusLine(ck);
+    return;
+  }
   const m = ck.metrics || {};
   const judge = (val, good, ni) => { const n = parseFloat(val); if (!Number.isFinite(n)) return ["", ""]; return n <= good ? ["Good", "var(--ok)"] : n <= ni ? ["Needs work", "var(--warn)"] : ["Poor", "var(--fail)"]; };
   const rows = [["LCP", m.lcp, judge(m.lcp, 2.5, 4)], ["CLS", m.cls, judge(m.cls, 0.1, 0.25)], ["TBT", m.tbt, judge(m.tbt, 200, 600)], ["FCP", m.fcp, judge(m.fcp, 1.8, 3)]]
@@ -1153,16 +1256,16 @@ function fillPsDetail(ck) {
   if (parseFloat(m.tbt) > 200) recs.push("Cut Total Blocking Time — defer non-critical JavaScript and split large bundles.");
   if (score < 90 && !recs.length) recs.push("Enable page caching and image compression to push the score above 90.");
   if (!recs.length) recs.push("Core Web Vitals look good — no major issues detected.");
-  box.innerHTML = `<div class="ps-wrap"><div class="gauge sm">${gaugeSvg(score)}<div class="gn"><b>${score}</b><span>/100</span></div></div><div class="ps-metrics">${rows || '<div class="empty-sm">No Core Web Vitals reported.</div>'}</div></div><ul class="ps-recs">${recs.map((r) => `<li>${r}</li>`).join("")}</ul>`;
+  box.innerHTML = `<div class="ps-wrap"><div class="gauge sm">${gaugeSvg(score)}<div class="gn"><b>${score}</b><span>/100</span></div></div><div class="ps-metrics">${rows || '<div class="empty-sm">No Core Web Vitals reported.</div>'}</div></div><ul class="ps-recs">${recs.map((r) => `<li>${r}</li>`).join("")}</ul>` + psStatusLine(ck);
 }
 
-// PageSpeed trend, uptime/response charts and the check-history table.
+// PageSpeed trend + uptime/response charts (from stored metric samples).
 async function loadDetailHistory(siteId, days) {
   const st = sdState[siteId] || (sdState[siteId] = {});
   days = days || st.days || 7;
   st.days = days;
-  const gp = document.getElementById("sd-pstrend"), gu = document.getElementById("sd-uptime"), gh = document.getElementById("sd-history");
-  if (!gp || !gu || !gh) return;
+  const gp = document.getElementById("sd-pstrend"), gu = document.getElementById("sd-uptime");
+  if (!gp || !gu) return;
   try {
     const res = await fetch("/api/history/" + siteId + "?days=" + days);
     const j = await res.json();
@@ -1177,7 +1280,7 @@ async function loadDetailHistory(siteId, days) {
       ? `<div class="hist-top"><span class="hist-up" style="color:${scoreColor(ps[ps.length - 1])}">${Math.round(ps[ps.length - 1])}</span><span class="hist-up-lbl">latest · ${days} days</span><div class="hranges">${ranges}</div></div><div class="sd-chart">${lineChart(ps, { color: scoreColor(ps[ps.length - 1]), W: 480, H: 120 })}</div>`
       : '<div class="empty-sm">Not enough PageSpeed samples yet — the trend appears after a few sweeps.</div>';
 
-    // Uptime / response time.
+    // Uptime / response time (uptime = % of samples not failing over the range).
     const rt = S.filter((x) => typeof x.responseMs === "number").map((x) => x.responseMs);
     const pill = document.getElementById("sd-upt-pill");
     if (pill) pill.textContent = j.uptime == null ? "" : j.uptime + "% up";
@@ -1187,31 +1290,21 @@ async function loadDetailHistory(siteId, days) {
         `<div class="sd-chart">${lineChart(rt, { color: "var(--accent)", W: 480, H: 110, zeroBase: true })}</div>`
       : '<div class="empty-sm">No uptime samples in this range yet.</div>';
 
-    // Recent check history table + status changes.
-    const recent = S.slice(-12).reverse();
-    const trows = recent.map((x) => {
-      const si = statusInfo(x.overall);
-      return `<tr><td>${new Date(x.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td><span class="badge ${si[0]}">${si[1]}</span></td><td>${x.pagespeed != null ? x.pagespeed + " /100" : "—"}</td><td>${x.responseMs != null ? x.responseMs + " ms" : "—"}</td><td>${x.sslDays != null ? x.sslDays + " days" : "—"}</td></tr>`;
-    }).join("");
-    const events = (j.events || []).slice(0, 6).map((e) => {
-      const si = statusInfo(e.to);
-      return `<li><span class="dot ${si[0]}"></span>${esc(e.from ? statusInfo(e.from)[1] : "New")} → ${esc(si[1])}<span class="hist-when">${relTime(e.at)}</span></li>`;
-    }).join("");
-    gh.innerHTML = recent.length
-      ? `<div style="overflow-x:auto"><table class="ttable"><thead><tr><th>Time</th><th>Status</th><th>PageSpeed</th><th>Response</th><th>SSL</th></tr></thead><tbody>${trows}</tbody></table></div>` +
-        (events ? `<h4 style="margin:16px 0 4px;font-family:var(--mono);font-size:10.5px;letter-spacing:0.05em;text-transform:uppercase;color:var(--faint)">Status changes</h4><ul class="sd-events">${events}</ul>` : "")
-      : '<div class="empty-sm">No check history recorded yet — it builds up as sweeps run.</div>';
     fillSiteDetail(); // uptime feeds the health score
   } catch (e) {
-    gp.innerHTML = gu.innerHTML = gh.innerHTML = '<div class="empty-sm">Could not load history.</div>';
+    gp.innerHTML = gu.innerHTML = '<div class="empty-sm">Could not load history.</div>';
   }
 }
 
 async function sdRunCheck() {
   const b = document.getElementById("sd-runbtn");
   if (b) { b.disabled = true; b.dataset.busy = "1"; b.innerHTML = '<span class="spinner"></span> Running'; }
-  try { await fetch("/api/check", { method: "POST" }); scheduleResults(2500); }
-  catch (e) { if (b) { b.disabled = false; b.dataset.busy = "0"; b.innerHTML = ICON.run + " Run check"; } }
+  try {
+    // On a site's detail page, check only this site (not a full sweep).
+    if (currentSiteId) { await fetch("/api/check/" + encodeURIComponent(currentSiteId), { method: "POST" }); await load(); }
+    else { await fetch("/api/check", { method: "POST" }); scheduleResults(POLL_RUNNING_MS); }
+  } catch (e) {}
+  finally { if (b) { b.disabled = false; b.dataset.busy = "0"; b.innerHTML = ICON.run + " Run check"; } }
 }
 
 // ---------- Views / navigation ----------
@@ -1385,10 +1478,16 @@ async function refreshWebsites() {
   try { const res = await fetch("/api/websites"); const j = await res.json(); if (j.ok) WEBSITES = j.websites || []; } catch (e) {}
   return WEBSITES;
 }
-function afterMutation() {
+// After add/edit, check only the affected site (not a full 41-site sweep).
+// On delete, just refresh the reads — nothing to check.
+function afterMutation(siteId) {
   bannerDismissed = false;
   refreshWebsites().then(() => render(latestData || { sites: {} }));
-  fetch("/api/check", { method: "POST" }).then(() => scheduleResults(2500)).catch(() => {});
+  if (siteId) {
+    fetch("/api/check/" + encodeURIComponent(siteId), { method: "POST" })
+      .then(() => load())
+      .catch(() => {});
+  }
 }
 async function editWebsite(id) {
   let site = WEBSITES.find((w) => w.id === id);
@@ -1413,7 +1512,7 @@ async function saveWebsite() {
     const res = await fetch(url, { method: editingSiteId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await res.json();
     if (!j.ok) throw new Error(j.error || "Save failed");
-    closeWebsiteModal(); afterMutation();
+    closeWebsiteModal(); afterMutation(j.website && j.website.id);
     if (creating && j.website) { setTimeout(() => { openWebsiteModal(j.website); document.getElementById("licNote").style.display = "block"; }, 80); }
   } catch (e) { const err = g("siteModalErr"); err.style.display = "block"; err.textContent = e.message; }
   finally { btn.disabled = false; btn.textContent = "Save"; }
@@ -1431,8 +1530,9 @@ async function refreshLanding() {
   return LANDING;
 }
 function landingAfterMutation() {
+  // Refresh the list only; landing-page checks run on the next scheduled sweep
+  // (no incidental full outbound sweep on every edit).
   refreshLanding().then(renderLanding);
-  fetch("/api/check", { method: "POST" }).then(() => scheduleResults(2500)).catch(() => {});
 }
 function renderLanding() {
   const box = document.getElementById("landingList");
@@ -1500,6 +1600,203 @@ async function deleteLanding(id, name) {
 }
 
 // ---------- Settings ----------
+// ---------- Per-site traffic (requests the web app makes to THIS site) ----------
+let siteTrafficHours = 24;
+function tfCard(cls, n, l, s) { return `<div class="tf-card ${cls}"><div class="tf-n">${n}</div><div class="tf-l">${esc(l)}</div><div class="tf-s">${esc(s)}</div></div>`; }
+// Donut (pie) of the plugin-vs-core split for the selected range.
+function trafficDonut(plugin, core) {
+  const totalv = plugin + core;
+  if (!totalv) return '<div class="dn-empty">No requests<br>in this range</div>';
+  const segs = [["Plugin API", plugin, "var(--accent)"], ["Core WordPress", core, "var(--info)"]].filter((s) => s[1] > 0);
+  const R = 56, C = 2 * Math.PI * R, cx = 72, cy = 72, sw = 18;
+  const gap = segs.length > 1 ? 8 : 0; // small gap between segments for a cleaner look
+  let offset = 0;
+  const rings = segs.map(([, v, color]) => {
+    const frac = v / totalv, len = Math.max(0.5, frac * C - gap);
+    const el = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>`;
+    offset += frac * C; return el;
+  }).join("");
+  const legend = segs.map(([l, v, color]) => `<div class="dn-row"><span class="dn-dot" style="background:${color}"></span><span class="dn-l">${esc(l)}</span><span class="dn-v">${v.toLocaleString()}<em>${Math.round((v / totalv) * 100)}%</em></span></div>`).join("");
+  return `<div class="dn-wrap"><svg viewBox="0 0 144 144" width="130" height="130" class="dn-svg"><circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--panel-2)" stroke-width="${sw}"/>${rings}<text x="${cx}" y="${cy - 3}" text-anchor="middle" class="dn-total">${totalv.toLocaleString()}</text><text x="${cx}" y="${cy + 15}" text-anchor="middle" class="dn-cap">requests</text></svg><div class="dn-legend">${legend}</div></div>`;
+}
+// Two-line trend (plugin vs core) with area fills, integer y-axis, and hover
+// tooltips (native SVG <title>) on each data point.
+function trafficChart(series) {
+  const n = series.length;
+  if (n < 2) return '<div class="empty-sm">Not enough data yet — the trend fills in as checks run.</div>';
+  const W = 720, H = 230, padL = 30, padR = 14, padT = 16, padB = 30;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const rawMax = Math.max(1, ...series.map((s) => Math.max(s.plugin, s.core)));
+  const maxV = rawMax <= 5 ? rawMax : Math.ceil(rawMax / 5) * 5; // "nice" round top
+  const x = (i) => padL + (i / (n - 1)) * iw;
+  const y = (v) => padT + (1 - v / maxV) * ih;
+  const baseY = y(0);
+  const ticks = maxV <= 5 ? Array.from({ length: maxV + 1 }, (_, i) => i) : [0, Math.round(maxV / 2), maxV];
+  const grid = ticks.map((v) => {
+    const gy = y(v);
+    return `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${gy.toFixed(1)}" stroke="var(--line-soft)" stroke-width="1"/><text x="${padL - 8}" y="${(gy + 3.5).toFixed(1)}" text-anchor="end" class="cx-lbl">${v}</text>`;
+  }).join("");
+  const area = (key, color) => {
+    const pts = series.map((s, i) => `${x(i).toFixed(1)},${y(s[key]).toFixed(1)}`).join(" L ");
+    return `<path d="M ${x(0).toFixed(1)},${baseY.toFixed(1)} L ${pts} L ${x(n - 1).toFixed(1)},${baseY.toFixed(1)} Z" fill="${color}" fill-opacity="0.10"/>`;
+  };
+  const line = (key, color) => `<polyline fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="${series.map((s, i) => `${x(i).toFixed(1)},${y(s[key]).toFixed(1)}`).join(" ")}"/>`;
+  const fmtFull = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric" });
+  const dots = (key, color, label) => series.map((s, i) => s[key] > 0
+    ? `<circle cx="${x(i).toFixed(1)}" cy="${y(s[key]).toFixed(1)}" r="3.2" fill="var(--panel)" stroke="${color}" stroke-width="2"><title>${esc(fmtFull(series[i].t))} · ${label}: ${s[key]}</title></circle>` : "").join("");
+  const fmt = (iso) => new Date(iso).toLocaleString([], siteTrafficHours >= 168 ? { month: "short", day: "numeric" } : { hour: "numeric" });
+  const idxs = [0, Math.floor((n - 1) / 2), n - 1];
+  const xlabels = idxs.map((i) => `<text x="${x(i).toFixed(1)}" y="${H - 9}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" class="cx-lbl">${esc(fmt(series[i].t))}</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:100%;height:auto;display:block">${grid}${area("core", "var(--info)")}${area("plugin", "var(--accent)")}${line("core", "var(--info)")}${line("plugin", "var(--accent)")}${dots("core", "var(--info)", "Core")}${dots("plugin", "var(--accent)", "Plugin")}${xlabels}</svg>`;
+}
+// Reference for each request the web app makes to a WordPress site — mirrors
+// exactly what the checks do server-side (fetchSite + the helper REST routes).
+const ENDPOINT_INFO = {
+  core: {
+    type: "Core WordPress", method: "GET", auth: "None — public page",
+    title: "GET / — Homepage fetch",
+    short: "Downloads the homepage once; powers HTTPS, response time, Cloudflare, CTM and Google Tag.",
+    what: "Downloads the site's public homepage HTML once per check. No plugin and no authentication required — this is how the dashboard can monitor sites even without the helper plugin. All of the checks below are read from this single response, so they cost no extra requests.",
+    powers: [
+      "HTTPS — whether the site loads over HTTPS and how it redirects",
+      "Response time — how long the homepage took to respond (ms)",
+      "Cloudflare — detected from the response headers (cf-ray / server)",
+      "CTM (CallTrackingMetrics) — scans the HTML for tctm.co / __ctm / data-ctm-account, and extracts the CTM account ID and on-page phone numbers",
+      "Google Tag — scans the HTML for googletagmanager.com/gtm.js and gtag(, and extracts GTM-, G- (GA4) and UA- IDs",
+    ],
+    notes: "SSL and PageSpeed do NOT come from this request: SSL reads the TLS certificate over a direct socket, and PageSpeed calls Google's API — neither hits the WordPress site here.",
+  },
+  status: {
+    type: "Plugin API", method: "GET", auth: "Bearer — site license key",
+    title: "GET /wp-json/wpmonitor/v1/status — Update status",
+    short: "Asks the helper plugin for pending WordPress, plugin and theme updates.",
+    what: "Calls the Digital Elements helper plugin for the site's update state. Only runs when the helper plugin is enabled for the site and the monitoring license is valid; it's authenticated with the site's license key sent as a Bearer token.",
+    powers: [
+      "WordPress core — whether an update is available and the target version",
+      "Plugin updates — each outdated plugin with current → new version",
+      "Theme updates — each outdated theme",
+      "Reported WordPress and PHP versions",
+    ],
+    notes: "This is the data behind the Updates check/card. If the helper isn't installed or the license is invalid, this request isn't made.",
+  },
+  security: {
+    type: "Plugin API", method: "GET", auth: "Bearer — site license key",
+    title: "GET /wp-json/wpmonitor/v1/security — Security scan",
+    short: "Reads the helper plugin's cached deep security scan.",
+    what: "Reads the result of the helper plugin's deep server-side security scan. The heavy scan runs on a daily cron on the WordPress site itself; this request just fetches the latest cached result, so it's fast. Authenticated with the license key.",
+    powers: [
+      "Injected / suspicious code signatures in site files",
+      "PHP files found in the uploads folder (a common backdoor sign)",
+      "Modified WordPress core files (checksum mismatches vs. official releases)",
+      "New administrator accounts created recently",
+      "Missing hardening headers (HSTS, X-Frame-Options, X-Content-Type-Options, CSP)",
+    ],
+    notes: "Combined with header/HTML findings from the homepage fetch to produce the overall Security verdict.",
+  },
+  "clear-cache": {
+    type: "Plugin API", method: "POST", auth: "Bearer — site license key",
+    title: "POST /wp-json/wpmonitor/v1/optimize/clear-cache — Clear cache",
+    short: "Flushes the site's caches (only when a user runs the optimization).",
+    what: "Triggered only when someone runs the Clear cache optimization. Tells the helper plugin to flush the object cache, expired transients, and any active caching plugin (WP Rocket, W3TC, LiteSpeed, etc.). Only clears regenerable caches — never content or settings.",
+    powers: ["Object cache flush", "Page-cache plugin purge", "Expired cache transients removed"],
+    notes: "Not part of a normal check sweep — it appears here only right after you click Clear cache.",
+  },
+  "remove-transients": {
+    type: "Plugin API", method: "POST", auth: "Bearer — site license key",
+    title: "POST /wp-json/wpmonitor/v1/optimize/remove-transients — Remove transients",
+    short: "Clears all transients + orphaned rows (only when a user runs it).",
+    what: "Triggered only when someone runs the Remove transients optimization. Deletes all WordPress transients and orphaned timeout rows from the options table. Safe — transients are regenerated on demand.",
+    powers: ["All transients cleared", "Orphaned transient-timeout rows removed"],
+    notes: "Not part of a normal check sweep — it appears here only right after you run it.",
+  },
+  other: {
+    type: "Request", method: "—", auth: "—",
+    title: "Request",
+    short: "An outbound request to this site.",
+    what: "An outbound request the dashboard made to this site.",
+    powers: [],
+    notes: "",
+  },
+};
+function classifyEndpoint(path) {
+  const p = String(path || "");
+  if (p === "/" || p === "" || /^\/\?/.test(p)) return "core";
+  if (/\/status\/?($|\?)/.test(p)) return "status";
+  if (/\/security\/?($|\?)/.test(p)) return "security";
+  if (/optimize\/clear-cache/.test(p)) return "clear-cache";
+  if (/optimize\/remove-transients/.test(p)) return "remove-transients";
+  if (/\/wp-json\/wpmonitor\//.test(p)) return "status"; // any other plugin call
+  return p.startsWith("/") ? "core" : "other";
+}
+function openEndpointInfo(key) {
+  const info = ENDPOINT_INFO[key] || ENDPOINT_INFO.other;
+  document.getElementById("ep-type").textContent = info.type;
+  document.getElementById("ep-title").textContent = info.title;
+  document.getElementById("ep-body").innerHTML =
+    `<p class="ep-what">${esc(info.what)}</p>` +
+    `<div class="ep-meta"><span><b>Method</b>${esc(info.method)}</span><span><b>Auth</b>${esc(info.auth)}</span></div>` +
+    (info.powers && info.powers.length ? `<h4 class="ep-h">What this request powers</h4><ul class="ep-list">${info.powers.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "") +
+    (info.notes ? `<div class="ep-note">${esc(info.notes)}</div>` : "");
+  document.getElementById("endpointModal").classList.add("show");
+  document.body.style.overflow = "hidden";
+}
+function closeEndpointInfo() { document.getElementById("endpointModal").classList.remove("show"); document.body.style.overflow = ""; }
+
+function setSiteTrafficRange(h) {
+  siteTrafficHours = h;
+  document.querySelectorAll("#st-ranges .hrange").forEach((b) => b.classList.toggle("on", Number(b.dataset.h) === h));
+  if (currentSiteId) loadSiteTraffic(currentSiteId);
+}
+async function loadSiteTraffic(siteId) {
+  const box = document.getElementById("sd-traffic");
+  if (!box) return;
+  try {
+    const res = await fetch(`/api/site-traffic/${encodeURIComponent(siteId)}?hours=${siteTrafficHours}`);
+    const j = await res.json();
+    if (!j.ok) { box.innerHTML = '<div class="empty-sm">' + esc(j.error || "Could not load traffic") + "</div>"; return; }
+    const S = j.series || [];
+    const sum = (k) => S.reduce((a, s) => a + (s[k] || 0), 0);
+    const plugin = sum("plugin"), core = sum("core"), wp = plugin + core;
+    const rangeLbl = siteTrafficHours >= 168 ? "7 days" : "24 hours";
+    // Hourly raw counts, newest first.
+    const hourRows = S.filter((s) => s.plugin || s.core).slice().reverse().slice(0, 48).map((s) => {
+      const t = new Date(s.t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric" });
+      return `<tr><td>${esc(t)}</td><td>${s.plugin}</td><td>${s.core}</td><td>${s.plugin + s.core}</td></tr>`;
+    }).join("");
+    const hourTable = hourRows
+      ? `<div style="overflow-x:auto;margin-top:8px"><table class="ttable"><thead><tr><th>Hour</th><th>Plugin</th><th>Core</th><th>Total</th></tr></thead><tbody>${hourRows}</tbody></table></div>`
+      : '<div class="empty-sm">No requests recorded to this site in this range yet.</div>';
+    // Exact recent requests (URL-level), newest first.
+    const REQ = j.requests || [];
+    const stCls = (n) => n == null ? "" : n >= 200 && n < 400 ? "lic-ok" : "lic-bad";
+    const reqRows = REQ.map((r) => {
+      const t = new Date(r.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      const tag = r.cat === "plugin" ? '<span class="src-chip src-zoho">Plugin</span>' : '<span class="src-chip">Core</span>';
+      const key = classifyEndpoint(r.path);
+      const short = (ENDPOINT_INFO[key] || ENDPOINT_INFO.other).short;
+      const link = `<a class="ep-link" title="${esc(short)} — click for details" onclick="openEndpointInfo('${key}')">${esc(r.path)}<span class="ep-i" aria-hidden="true">ⓘ</span></a>`;
+      return `<tr><td>${esc(t)}</td><td>${tag}</td><td class="mono">${esc(r.method)}</td><td class="mono" style="word-break:break-all">${link}</td><td class="${stCls(r.status)}">${r.status == null ? "—" : r.status}</td></tr>`;
+    }).join("");
+    const reqTable = reqRows
+      ? `<div style="overflow-x:auto;margin-top:8px"><table class="ttable"><thead><tr><th>Time</th><th>Type</th><th>Method</th><th>URL path <span class="th-hint">(click a path for details)</span></th><th>Status</th></tr></thead><tbody>${reqRows}</tbody></table></div>`
+      : '<div class="empty-sm">No individual requests captured yet — run a check to populate.</div>';
+    box.innerHTML =
+      `<div class="tf-cards tf-cards-3">` +
+        tfCard("wp", wp, "Total requests", "last " + rangeLbl) +
+        tfCard("plugin", plugin, "Plugin API", "/wpmonitor/*") +
+        tfCard("core", core, "Core WordPress", "page fetch") +
+      `</div>` +
+      `<div class="tf-split">` +
+        `<div class="tf-panel"><div class="tf-sub">Split · last ${rangeLbl}</div>${trafficDonut(plugin, core)}</div>` +
+        `<div class="tf-panel"><div class="tf-panel-head"><span class="tf-sub" style="margin:0">Requests per hour</span><span class="tf-legend"><span><i style="background:var(--accent)"></i>Plugin</span><span><i style="background:var(--info)"></i>Core</span></span></div>${trafficChart(S)}</div>` +
+      `</div>` +
+      `<div class="foot" style="text-align:left;margin:14px 0 4px">Recent requests to <code>${esc(j.host || "")}</code> (exact URLs):</div>` +
+      reqTable +
+      `<div class="foot" style="text-align:left;margin:14px 0 4px">Hourly totals:</div>` +
+      hourTable;
+  } catch (e) { box.innerHTML = '<div class="empty-sm">Could not reach the server.</div>'; }
+}
+
 async function renderSettings() {
   updateThemePicker();
   const card = document.getElementById("monitorCard");
@@ -1515,10 +1812,37 @@ async function renderSettings() {
   else { document.getElementById("set-ps-val").value = Math.round(ps / 60); document.getElementById("set-ps-unit").value = "minutes"; }
   const sweepSel = document.getElementById("set-sweep");
   sweepSel.value = String(s.sweepIntervalSeconds);
-  if (!sweepSel.value) sweepSel.value = "60";
+  if (!sweepSel.value) sweepSel.value = "3600"; // snap unknown/legacy values to hourly
   document.getElementById("set-ssl").value = s.sslWarnDays;
   document.getElementById("set-retention").value = s.historyRetentionDays ?? 180;
+  document.getElementById("set-auto").checked = s.autoChecks !== false;
   document.getElementById("settingsMsg").textContent = "";
+  renderUsage(s);
+}
+function renderUsage(s) {
+  const box = document.getElementById("usageBox");
+  if (!box) return;
+  const u = s.usage || {};
+  const p = u.plugin || {};
+  const sw = s.lastSweep || {};
+  const cyc = u.lastCycle;
+  const last = s.lastRun ? new Date(s.lastRun).toLocaleString() : "never";
+  const cycAll = sw.requests != null ? sw.requests : (cyc ? cyc.requests : "—");
+  const cycPlugin = sw.pluginRequests != null ? sw.pluginRequests : (cyc && cyc.pluginRequests != null ? cyc.pluginRequests : "—");
+  box.innerHTML =
+    `<div class="ub-sub">All outbound requests (sites, Google, ClickUp/Zoho, plugin)</div>` +
+    `<div class="usage-grid">` +
+    `<div><span class="ub-n">${cycAll}</span><span class="ub-l">last check cycle</span></div>` +
+    `<div><span class="ub-n">${u.lastHour != null ? u.lastHour : "—"}</span><span class="ub-l">last hour</span></div>` +
+    `<div><span class="ub-n">${u.lastDay != null ? u.lastDay : "—"}</span><span class="ub-l">last 24 h</span></div>` +
+    `</div>` +
+    `<div class="ub-sub" style="margin-top:14px">Requests to the WordPress plugin only (load on client sites)</div>` +
+    `<div class="usage-grid">` +
+    `<div><span class="ub-n ub-plugin">${cycPlugin}</span><span class="ub-l">last check cycle</span></div>` +
+    `<div><span class="ub-n ub-plugin">${p.lastHour != null ? p.lastHour : "—"}</span><span class="ub-l">last hour</span></div>` +
+    `<div><span class="ub-n ub-plugin">${p.lastDay != null ? p.lastDay : "—"}</span><span class="ub-l">last 24 h</span></div>` +
+    `</div>` +
+    `<div class="ub-foot">Last check cycle: ${esc(last)}${sw.durationMs ? ` · took ${Math.round(sw.durationMs / 1000)}s` : ""}${sw.sites ? ` · ${sw.sites} sites` : ""}</div>`;
 }
 async function saveSettings() {
   const val = Number(document.getElementById("set-ps-val").value) || 1;
@@ -1528,6 +1852,7 @@ async function saveSettings() {
     sweepIntervalSeconds: Number(document.getElementById("set-sweep").value),
     sslWarnDays: Number(document.getElementById("set-ssl").value),
     historyRetentionDays: Number(document.getElementById("set-retention").value),
+    autoChecks: document.getElementById("set-auto").checked,
   };
   const msg = document.getElementById("settingsMsg");
   const res = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -1664,14 +1989,7 @@ async function loadHistory(siteId, days) {
       chart("PageSpeed", ps, { color: psColor, fmt: (v) => Math.round(v) }) +
       chart("Response time", rt, { color: "var(--accent)", zeroBase: true, fmt: (v) => Math.round(v) + "ms" }) +
       chart("SSL days left", ssl, { color: "var(--info)", zeroBase: true, fmt: (v) => Math.round(v) + "d" });
-    const events = (j.events || []).slice(0, 8);
-    const evHtml = events.length
-      ? '<ul class="hist-list">' + events.map((e) => {
-          const [c, t] = statusInfo(e.to);
-          const from = e.from ? statusInfo(e.from)[1] : "New";
-          return `<li><span class="dot ${c}"></span>${esc(from)} \u2192 ${esc(t)}<span class="hist-when">${relTime(e.at)}</span></li>`;
-        }).join("") + "</ul>"
-      : '<div class="sub" style="font-size:12px;color:var(--muted)">No status changes recorded in this range.</div>';
+    const evHtml = ""; // status-change events removed
     box.innerHTML =
       `<div class="hist-top"><span class="hist-up">${up}</span><span class="hist-up-lbl">uptime · ${days} days</span><div class="hranges">${ranges}</div></div>` +
       `<div class="hcharts">${charts || '<div class="sub" style="font-size:12px;color:var(--muted)">Trends appear once a few samples have been collected.</div>'}</div>` +
@@ -1771,6 +2089,7 @@ function updateMyTasksBadge(n) {
   set("bn-mytasks-count", n > 99 ? "99+" : n, n > 0);
 }
 async function fetchMyTasksCount() {
+  if (document.hidden) return; // this call hits ClickUp/Zoho — skip for hidden tabs
   try {
     const res = await fetch("/api/my-tasks");
     const j = await res.json();
@@ -1902,7 +2221,7 @@ function renderModal() {
     ? `<table class="ttable"><thead><tr><th>Task</th><th>List</th><th>Status</th><th>Assignee</th><th>Due</th><th>Priority</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
     : '<div class="empty" style="padding:40px">No tasks to show.</div>';
 }
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeTasks(); closeWebsiteModal(); closeUsers(); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeTasks(); closeWebsiteModal(); closeUsers(); closeEndpointInfo(); } });
 
 // ---------- Icons ----------
 const ICON = {
@@ -2032,6 +2351,12 @@ boot();
       <div id="landingModalErr" class="err" style="display:none"></div>
     </div>
     <div class="modal-actions"><button class="btn-ghost" onclick="closeLandingModal()">Cancel</button><button class="btn-primary" id="landingSaveBtn" onclick="saveLanding()">Save</button></div>
+  </div>
+</div>
+<div class="modal" id="endpointModal" onclick="if(event.target===this)closeEndpointInfo()">
+  <div class="modal-panel" style="width:min(560px,100%)">
+    <div class="modal-head"><div><div class="modal-eyebrow" id="ep-type">Request</div><h2 id="ep-title"></h2></div><button class="modal-x" onclick="closeEndpointInfo()">&times;</button></div>
+    <div class="modal-body" id="ep-body"></div>
   </div>
 </div>
 </body>

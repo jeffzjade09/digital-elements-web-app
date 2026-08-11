@@ -12,25 +12,59 @@ import { checkClickUp } from "./checks/clickup.js";
 import { checkZoho } from "./checks/zoho.js";
 import { combineTaskChecks } from "./checks/tasks.js";
 import { checkSecurity, mergeDeepSecurity } from "./checks/security.js";
+import { loadPsCache, savePsCache } from "./store.js";
 
 // Worst status wins for the site-level roll-up. "skip"/"info" never lower a site
 // (open tasks are informational, not a site-health problem).
 const RANK = { ok: 0, skip: 0, info: 0, warn: 1, fail: 2 };
 
 // PageSpeed is slow and rate-limited, so we cache each site's score and only
-// re-run it once its result is older than pageSpeed.minIntervalMs (default 2 min).
-// This lets the rest of the sweep run frequently for a near-live dashboard.
-const psCache = new Map(); // url -> { result, ts }
+// re-run it once the last attempt is older than pageSpeed.minIntervalMs. The
+// cache is persisted to disk (see store.js) so the interval is honored across
+// restarts rather than re-running every site on every boot.
+let psCache = null; // url -> { attemptAt, result(last good), lastGoodAt, lastError, lastErrorAt }
+function psStore() { if (!psCache) psCache = loadPsCache(); return psCache; }
+
+// Attach run/status metadata so the dashboard can show a real "last run / next
+// run" and flag stale or failed scores instead of silently showing an old one.
+function annotatePs(entry, ttl, cached) {
+  const base = entry.result
+    ? { ...entry.result }
+    : { status: "warn", label: "No data", detail: entry.lastError || "PageSpeed has not run yet", metrics: {} };
+  base.psRanAt = entry.lastGoodAt ? new Date(entry.lastGoodAt).toISOString() : null;
+  base.psAttemptAt = entry.attemptAt ? new Date(entry.attemptAt).toISOString() : null;
+  base.psNextAt = entry.attemptAt ? new Date(entry.attemptAt + ttl).toISOString() : null;
+  base.psCached = !!cached;
+  // "Stale" = the most recent attempt failed, so the number shown (if any) is
+  // from an earlier successful run.
+  const failedLatest = entry.lastErrorAt && (!entry.lastGoodAt || entry.lastErrorAt >= entry.lastGoodAt);
+  if (failedLatest) { base.psError = entry.lastError; base.psStale = true; }
+  return base;
+}
 
 async function getPageSpeedCached(url, settings) {
   const ttl = settings.pageSpeed.minIntervalMs || 120000;
-  const hit = psCache.get(url);
-  if (hit && Date.now() - hit.ts < ttl) {
-    return { ...hit.result, detail: hit.result.detail, cached: true };
+  const cache = psStore();
+  const entry = cache[url] || {};
+  const now = Date.now();
+
+  if (entry.attemptAt && now - entry.attemptAt < ttl) {
+    return annotatePs(entry, ttl, true); // still within the refresh window
   }
+
   const result = await checkPageSpeed(url, settings.pageSpeed);
-  psCache.set(url, { result, ts: Date.now() });
-  return result;
+  entry.attemptAt = now;
+  if (typeof result.score === "number") {
+    entry.result = result;         // keep last *good* result
+    entry.lastGoodAt = now;
+    delete entry.lastError; delete entry.lastErrorAt;
+  } else {
+    entry.lastError = result.detail || "No data";
+    entry.lastErrorAt = now;        // keep the previous good result (if any)
+  }
+  cache[url] = entry;
+  savePsCache(cache);
+  return annotatePs(entry, ttl, false);
 }
 
 function rollUp(checks) {
