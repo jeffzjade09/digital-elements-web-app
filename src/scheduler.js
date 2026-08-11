@@ -118,7 +118,10 @@ export async function runSingle(siteId, settings) {
 let tickTimer = null;
 
 export function startScheduler(settings) {
-  let lastSweep = 0;
+  // Start the clock at boot so the first automatic sweep waits a full interval.
+  // (A genuine first-ever run is handled by the cold-start check in server.js.)
+  // This stops every restart/redeploy from forcing an immediate full sweep.
+  let lastSweep = Date.now();
   let lastCleanup = 0;
   let lastMetricsFlush = 0;
   tickTimer = setInterval(() => {

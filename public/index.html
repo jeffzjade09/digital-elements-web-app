@@ -318,6 +318,13 @@
   .dn-v { margin-left: auto; font-family: var(--display); font-weight: 700; font-size: 15px; display: flex; align-items: baseline; gap: 6px; }
   .dn-v em { font-style: normal; font-family: var(--body); font-weight: 500; font-size: 11px; color: var(--muted); }
   .cx-lbl { fill: var(--faint); font-size: 10px; font-family: var(--mono); }
+  /* Dashboard traffic rollup */
+  .dash-traffic { margin-bottom: 20px; }
+  .dt-big { font-family: var(--display); font-weight: 700; font-size: 34px; line-height: 1; }
+  .dt-big span { display: block; font-family: var(--body); font-weight: 500; font-size: 12px; color: var(--muted); margin-top: 5px; }
+  .dt-bar { display: flex; height: 8px; border-radius: 5px; overflow: hidden; background: var(--panel-2); margin: 16px 0 14px; }
+  .dt-bar i { display: block; height: 100%; }
+  .dt-brk { display: flex; flex-direction: column; gap: 9px; }
   /* Clickable endpoint paths + info modal */
   .ep-link { color: var(--accent); cursor: pointer; text-decoration: none; }
   .ep-link:hover { text-decoration: underline; }
@@ -609,6 +616,7 @@
       <section class="view" id="view-dashboard">
         <div id="setupBanner" class="setup-banner" style="display:none"></div>
         <div class="stats" id="stats"></div>
+        <div id="dashTraffic"></div>
         <div class="searchbar"><span class="search-ic" id="searchIc">__ICON_SEARCH__</span><input id="siteSearch" type="search" placeholder="Search websites by name or URL…" oninput="onSiteSearch(this.value)" autocomplete="off" /></div>
         <div id="board"></div>
         <div class="foot" id="foot"></div>
@@ -780,6 +788,10 @@ async function load() {
     const res = await fetch("/api/results");
     const data = await res.json();
     render(data);
+    // Refresh the dashboard traffic rollup when a new sweep lands (admin only).
+    if (ME.perms.manageWebsites && currentView === "dashboard" && data.lastRun !== dashLastRun) {
+      dashLastRun = data.lastRun; loadDashTraffic();
+    }
     // The websites list rarely changes \u2014 refresh it at most every 5 min while idle.
     if (!data.running && Date.now() - lastWebsitesRefresh > 300000) {
       lastWebsitesRefresh = Date.now();
@@ -1332,6 +1344,7 @@ function showView(name) {
   if (name === "landing") refreshLanding().then(renderLanding);
   if (name === "mytasks") renderMyTasks();
   if (name === "settings") renderSettings();
+  if (name === "dashboard" && ME.perms.manageWebsites) loadDashTraffic();
 }
 function renderWebsitesList() {
   const box = document.getElementById("websitesList");
@@ -1603,6 +1616,70 @@ async function deleteLanding(id, name) {
 // ---------- Per-site traffic (requests the web app makes to THIS site) ----------
 let siteTrafficHours = 24;
 function tfCard(cls, n, l, s) { return `<div class="tf-card ${cls}"><div class="tf-n">${n}</div><div class="tf-l">${esc(l)}</div><div class="tf-s">${esc(s)}</div></div>`; }
+// Generalized donut for N segments [{label,value,color}] with hover tooltips.
+function donutChart(segments, centerNum, centerCap) {
+  const total = segments.reduce((a, s) => a + s.value, 0);
+  if (!total) return '<div class="dn-empty">No requests<br>in this range</div>';
+  const R = 56, C = 2 * Math.PI * R, cx = 72, cy = 72, sw = 18;
+  const gap = segments.length > 1 ? 6 : 0;
+  let offset = 0;
+  const rings = segments.map((s) => {
+    const frac = s.value / total, len = Math.max(0.5, frac * C - gap);
+    const el = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${s.color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"><title>${esc(s.label)}: ${s.value.toLocaleString()} (${Math.round(frac * 100)}%)</title></circle>`;
+    offset += frac * C; return el;
+  }).join("");
+  return `<svg viewBox="0 0 144 144" width="130" height="130" class="dn-svg"><circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--panel-2)" stroke-width="${sw}"/>${rings}<text x="${cx}" y="${cy - 3}" text-anchor="middle" class="dn-total">${centerNum}</text><text x="${cx}" y="${cy + 15}" text-anchor="middle" class="dn-cap">${esc(centerCap || "")}</text></svg>`;
+}
+const SITE_COLORS = ["var(--accent)", "var(--info)", "var(--ok)", "var(--warn)", "var(--fail)", "#a78bfa", "#f0997b", "#5dcaa5"];
+
+// ---------- Dashboard traffic rollup (all sites; admin/webdev) ----------
+let dashTrafficHours = 24, dashLastRun = null;
+function setDashTrafficRange(h) {
+  dashTrafficHours = h;
+  document.querySelectorAll("#dt-ranges .hrange").forEach((b) => b.classList.toggle("on", Number(b.dataset.h) === h));
+  loadDashTraffic();
+}
+async function loadDashTraffic() {
+  const box = document.getElementById("dashTraffic");
+  if (!box || !ME.perms.manageWebsites) return;
+  try {
+    const res = await fetch("/api/traffic-overview?hours=" + dashTrafficHours);
+    const j = await res.json();
+    if (!j.ok) { box.innerHTML = ""; return; }
+    const t = j.totals || { plugin: 0, core: 0, wordpress: 0 };
+    const sites = j.sites || [];
+    const rangeLbl = dashTrafficHours >= 168 ? "7 days" : "24 hours";
+    const pPct = t.wordpress ? Math.round((t.plugin / t.wordpress) * 100) : 0;
+    const cPct = t.wordpress ? 100 - pPct : 0;
+    // Top sites for the pie; the rest grouped as "Other".
+    const TOP = 7;
+    const top = sites.slice(0, TOP);
+    const otherTotal = sites.slice(TOP).reduce((a, s) => a + s.total, 0);
+    const segs = top.map((s, i) => ({ label: s.name, value: s.total, color: SITE_COLORS[i % SITE_COLORS.length] }));
+    if (otherTotal > 0) segs.push({ label: `Other (${sites.length - TOP} sites)`, value: otherTotal, color: "var(--faint)" });
+    const legend = segs.length
+      ? segs.map((s) => `<div class="dn-row"><span class="dn-dot" style="background:${s.color}"></span><span class="dn-l">${esc(s.label)}</span><span class="dn-v">${s.value.toLocaleString()}<em>${t.wordpress ? Math.round((s.value / t.wordpress) * 100) : 0}%</em></span></div>`).join("")
+      : '<div class="empty-sm">No requests recorded in this range yet.</div>';
+    box.innerHTML =
+      `<div class="sdp dash-traffic">` +
+        `<h3 style="display:flex;align-items:center;gap:10px"><span class="ci">${ICON.gauge}</span>WordPress request traffic · all sites` +
+          `<span class="hranges" id="dt-ranges" style="margin-left:auto"><button class="hrange${dashTrafficHours === 24 ? " on" : ""}" data-h="24" onclick="setDashTrafficRange(24)">24h</button><button class="hrange${dashTrafficHours === 168 ? " on" : ""}" data-h="168" onclick="setDashTrafficRange(168)">7d</button></span></h3>` +
+        `<div class="tf-split">` +
+          `<div class="tf-panel"><div class="tf-sub">Broken down · last ${rangeLbl}</div>` +
+            `<div class="dt-big">${t.wordpress.toLocaleString()}<span>total WordPress requests</span></div>` +
+            `<div class="dt-bar">${t.wordpress ? `<i style="width:${pPct}%;background:var(--accent)"></i><i style="width:${cPct}%;background:var(--info)"></i>` : ""}</div>` +
+            `<div class="dt-brk">` +
+              `<div class="dn-row"><span class="dn-dot" style="background:var(--accent)"></span><span class="dn-l">Plugin API</span><span class="dn-v">${t.plugin.toLocaleString()}<em>${pPct}%</em></span></div>` +
+              `<div class="dn-row"><span class="dn-dot" style="background:var(--info)"></span><span class="dn-l">Core WordPress</span><span class="dn-v">${t.core.toLocaleString()}<em>${cPct}%</em></span></div>` +
+            `</div>` +
+          `</div>` +
+          `<div class="tf-panel"><div class="tf-sub">Requests by site · top ${Math.min(TOP, sites.length) || 0}</div>` +
+            `<div class="dn-wrap">${donutChart(segs, t.wordpress.toLocaleString(), "requests")}<div class="dn-legend">${legend}</div></div>` +
+          `</div>` +
+        `</div>` +
+      `</div>`;
+  } catch (e) { box.innerHTML = ""; }
+}
 // Donut (pie) of the plugin-vs-core split for the selected range.
 function trafficDonut(plugin, core) {
   const totalv = plugin + core;
@@ -1792,7 +1869,7 @@ async function loadSiteTraffic(siteId) {
       `</div>` +
       `<div class="foot" style="text-align:left;margin:14px 0 4px">Recent requests to <code>${esc(j.host || "")}</code> (exact URLs):</div>` +
       reqTable +
-      `<div class="foot" style="text-align:left;margin:14px 0 4px">Hourly totals:</div>` +
+      `<div class="foot" style="text-align:left;margin:14px 0 4px">Requests grouped by hour (only hours with activity are listed — not a per-hour schedule):</div>` +
       hourTable;
   } catch (e) { box.innerHTML = '<div class="empty-sm">Could not reach the server.</div>'; }
 }

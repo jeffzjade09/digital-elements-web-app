@@ -8,7 +8,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { installFetchCounter, getStats, getSiteStats, getSiteSeries, getSiteRequests } from "./metrics.js";
+import { installFetchCounter, getStats, getSiteStats, getSiteSeries, getSiteRequests, getHostTotals } from "./metrics.js";
 installFetchCounter(); // wrap global fetch before any check module runs
 
 import { loadSettings, loadResults, applyStoredSettings } from "./store.js";
@@ -163,6 +163,28 @@ app.get("/api/results", requireAuth, (req, res) => {
   const results = loadResults();
   results.running = isCheckRunning();
   res.json(results);
+});
+
+// All-sites rollup for the dashboard: total WordPress requests split by plugin
+// vs core, plus a per-site ranking (which sites we're requesting most).
+app.get("/api/traffic-overview", requireAuth, requirePerm("manageWebsites"), async (req, res) => {
+  const hours = Math.max(1, Math.min(336, Math.round(Number(req.query.hours) || 24)));
+  const hostHost = (u) => { try { return new URL(/^https?:\/\//i.test(u) ? u : "https://" + u).host.replace(/:\d+$/, "").replace(/^www\./i, "").toLowerCase(); } catch { return ""; } };
+  try {
+    const totalsByHost = getHostTotals(hours);
+    const sites = await getWebsites();
+    let plugin = 0, core = 0;
+    const bySite = [];
+    for (const s of sites) {
+      const t = totalsByHost[hostHost(s.url)];
+      if (!t) continue;
+      const p = t.plugin || 0, c = t.core || 0;
+      plugin += p; core += c;
+      if (p + c > 0) bySite.push({ siteId: s.id, name: s.name, plugin: p, core: c, total: p + c });
+    }
+    bySite.sort((a, b) => b.total - a.total);
+    res.json({ ok: true, hours, totals: { plugin, core, wordpress: plugin + core }, sites: bySite });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // Per-site outbound traffic: how many requests the web app is making to THIS
