@@ -30,6 +30,13 @@ resolved in this order:
 3. their team's default role
 4. `subscriber`
 
+Any of those may be **Administrator**, and the seeded teams default to it —
+this agency administers the sites it builds, so that is the ordinary working
+role rather than an exception. The choices are the core five plus every role
+discovered on a connected website, so a client's custom role (`seo_editor`,
+`shop_manager`) can be picked as a default too. The display name is shown; the
+slug is stored.
+
 ### Elevated roles, in two tiers
 
 A role is reported with two flags, and the difference is load-bearing:
@@ -40,10 +47,13 @@ A role is reported with two flags, and the difference is load-bearing:
 | `is_admin_like` | the above, **or** `unfiltered_html` | Shown as a notice |
 
 They are separate because **stock WordPress grants `unfiltered_html` to Editor**,
-and Editor is every team's default role. A confirmation keyed on the broad flag
-would fire on the single most common assignment there is — and a confirmation
-that fires on the common case is one people learn to click through, which is
-worse than not having it.
+which is an ordinary role to assign. A confirmation keyed on the broad flag
+would fire on assignments that carry no real risk — and a confirmation that
+fires on the common case is one people learn to click through, which is worse
+than not having it.
+
+The same reasoning is why Administrator is allowed as a default. Making the
+common case awkward does not make it safer; it makes the warnings worthless.
 
 Both flags come from the site's own capability map, so a plugin-defined role
 that can administer the site is caught the same way Administrator is.
@@ -139,8 +149,14 @@ These hold across every phase:
 - **Agency domain.** Only `@digitalelementsgroup.com` addresses can be added
   unless an authorized administrator explicitly confirms an override, which is
   recorded in the activity log.
-- **Least privilege.** Administrator can never be a team or per-user *default*.
-  It is granted per website, with an explicit confirmation _(later phase)_.
+- **Administrator is allowed as a default, and still gated.** It may be a team
+  or per-user default. What protects a client is not the role's absence from a
+  dropdown — it never was — but the two things that did the actual work:
+  a website only accepts an administering role if **its own administrator
+  granted `users:admin`**, which this dashboard cannot do, and assigning one
+  needs an **explicit confirmation before the job runs**. Sites that haven't
+  granted it show those assignments as blocked in the review, with the reason.
+  Every grant is written to the audit log.
 - **A site opts in.** User management cannot be switched on remotely. The site
   redeems a one-time code that someone with access to its WP admin pasted in,
   and it can disconnect at any time.
@@ -410,6 +426,30 @@ Three details matter more than the rest:
 
 The predicted actions use the same vocabulary the sync phase reports back, so
 the review screen and the results screen line up.
+
+## Granting Administrator
+
+Administrator (and any role that can install plugins or edit files) is gated by
+two things, neither of which is the dropdown it was chosen from:
+
+**1. The website must have allowed it.** Someone with access to that site's WP
+Admin switches on `users:admin` under DE Monitoring → User management. This
+dashboard cannot turn it on. A site that hasn't shows those assignments as
+**blocked** in the review with the reason and where the switch lives, rather
+than failing one site at a time during a run.
+
+**2. One confirmation, per job.** Before anything is applied:
+
+> **This grants Administrator on 7 websites.**
+> _(the websites, named)_
+> 34 assignments in total.
+
+One confirmation for the whole job, phrased in **websites** rather than
+assignments — "on 7 websites" is a sentence someone can weigh; "34 assignments"
+is not. Blocked sites are excluded from that count, because they aren't going to
+happen.
+
+Every grant is written to the audit log with the actor, the site and the role.
 
 ## Applying a plan
 

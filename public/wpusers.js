@@ -15,6 +15,7 @@ const WPU = {
   teams: [],
   users: [],
   roles: [],
+  roleSiteTotal: 0,
   loaded: false,
   websites: [],
   assignments: [],
@@ -68,12 +69,25 @@ function wpuRoleChip(role, inherited) {
   return `<span class="${cls}" title="${inherited ? "Inherited from the team" : "Set on this person"}">${esc(role)}</span>`;
 }
 
-// Administrator is never offered as a default — it is granted per website with
-// an explicit confirmation, which is what the server enforces too.
+/**
+ * Every role we could store as a default: the core five plus everything
+ * discovered on a connected website.
+ *
+ * Administering roles ARE offered — see the policy note in roles.js. What still
+ * protects a client is the per-site users:admin scope and the confirmation
+ * before a job runs, neither of which lives in this dropdown.
+ *
+ * The display name is shown and the slug is stored, and a role only some sites
+ * have says so, rather than presenting a plugin-specific role as universal.
+ */
 function wpuRoleOptions(selected, { includeInherit = false, inheritLabel = "" } = {}) {
-  const opts = WPU.roles.filter((r) => !r.adminLike).map((r) =>
-    `<option value="${esc(r.slug)}"${r.slug === selected ? " selected" : ""}>${esc(r.name)}</option>`
-  );
+  const total = WPU.roleSiteTotal || 0;
+  const opts = WPU.roles.map((r) => {
+    const partial = !r.core && r.siteCount > 0 && total > 0 && r.siteCount < total;
+    const note = r.siteAdmin ? " — administers the site"
+      : partial ? ` — on ${r.siteCount} of ${total} websites` : "";
+    return `<option value="${esc(r.slug)}"${r.slug === selected ? " selected" : ""}>${esc(r.name)}${esc(note)}</option>`;
+  });
   if (includeInherit) {
     opts.unshift(`<option value=""${!selected ? " selected" : ""}>${esc(inheritLabel || "Use the team default")}</option>`);
   }
@@ -156,6 +170,7 @@ async function renderWpUsers() {
       WPU.teams = teams.teams;
       WPU.users = users.users;
       WPU.roles = roles.roles;
+      WPU.roleSiteTotal = roles.siteTotal || 0;
       WPU.loaded = true;
       // Website names are needed by the Users and Activity filters. Loaded
       // without re-probing every site, and a failure here must not stop the
@@ -250,7 +265,12 @@ function wpuEditTeam(id) {
       <div class="wpu-field">
         <label for="wpu-t-role">Default WordPress role</label>
         <select id="wpu-t-role">${wpuRoleOptions(team ? team.defaultWpRole : "editor")}</select>
-        <div class="hint">Applied to this team’s members on a website unless a per-person or per-website override says otherwise. Administrator is granted per website, with confirmation — never as a default.</div>
+        <div class="hint">
+          Applied to this team’s members on a website unless a per-person or per-website
+          override says otherwise. Administrator is allowed here — a website still only
+          accepts it if its own administrator has permitted it, and you’ll confirm once
+          before anything is applied.
+        </div>
       </div>`,
     actions: `<button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>
               <button class="btn-primary" onclick="wpuSaveTeam(${team ? `'${escJs(team.id)}'` : "null"})">${team ? "Save changes" : "Create team"}</button>`,
@@ -1068,9 +1088,14 @@ function wpuRenderReview() {
       changed on them, and they’re never adopted automatically.
     </div>` : ""}
 
-    ${s.needsAdminConfirmation ? `<div class="wpu-danger">
-      <strong>${s.needsAdminConfirmation} assignment${s.needsAdminConfirmation === 1 ? "" : "s"} would grant a role that can administer the site.</strong>
-      That needs an explicit confirmation before it can be applied.
+    ${s.adminSiteCount ? `<div class="wpu-danger">
+      <strong>This grants Administrator on ${s.adminSiteCount} website${s.adminSiteCount === 1 ? "" : "s"}.</strong>
+      You’ll confirm that once, before anything is applied.
+    </div>` : ""}
+
+    ${s.adminBlockedSiteCount ? `<div class="wpu-warnbox">
+      <strong>${s.adminBlockedSiteCount} website${s.adminBlockedSiteCount === 1 ? "" : "s"} haven’t allowed Administrator to be granted from here.</strong>
+      That switch lives in each site’s own DE Monitoring panel — this dashboard can’t turn it on.
     </div>` : ""}
 
     ${s.contentRisk ? `<div class="wpu-note" style="margin-bottom:14px">
@@ -1127,8 +1152,12 @@ function wpuConfirmApply() {
   if (!pf) return;
   const s = pf.summary;
 
-  const needsAdmin = s.needsAdminConfirmation > 0;
-  const adminRows = pf.rows.filter((r) => r.needsAdminConfirmation);
+  // ONE confirmation for the whole job, not one per person. The thing worth
+  // weighing is "which websites does this hand over", so the sites are named
+  // once and the assignment count is a footnote.
+  const needsAdmin = s.adminSiteCount > 0;
+  const adminRows = pf.rows.filter((r) => r.needsAdminConfirmation && r.action !== "blocked");
+  const adminSiteNames = [...new Set(adminRows.map((r) => r.websiteName))];
   const demotions = pf.rows.filter(
     (r) => r.action === "update" && (r.currentRoles || []).includes("administrator")
   );
@@ -1149,15 +1178,21 @@ function wpuConfirmApply() {
 
       ${needsAdmin ? `
         <div class="wpu-danger">
-          <strong>${adminRows.length} assignment${adminRows.length === 1 ? "" : "s"} would grant a role that can administer the website.</strong>
-          <div style="margin-top:7px">${adminRows.slice(0, 5).map((r) =>
-            `${esc(r.staffLabel)} → ${esc(r.requestedRole)} on ${esc(r.websiteName)}`).join("<br />")}
-            ${adminRows.length > 5 ? `<br />…and ${adminRows.length - 5} more` : ""}</div>
+          <strong>This grants Administrator on ${s.adminSiteCount} website${s.adminSiteCount === 1 ? "" : "s"}.</strong>
+          <div style="margin-top:7px">${adminSiteNames.slice(0, 8).map(esc).join("<br />")}
+            ${adminSiteNames.length > 8 ? `<br />…and ${adminSiteNames.length - 8} more` : ""}</div>
+          <div style="margin-top:7px">${adminRows.length} assignment${adminRows.length === 1 ? "" : "s"} in total.</div>
         </div>
         <label class="wpu-check" style="margin-bottom:14px">
           <input type="checkbox" id="wpu-c-admin" />
           <span>I confirm these people should be able to administer those websites.</span>
         </label>` : ""}
+
+      ${s.adminBlockedSiteCount ? `<div class="wpu-warnbox">
+        <strong>${s.adminBlockedSiteCount} website${s.adminBlockedSiteCount === 1 ? " hasn’t" : "s haven’t"} allowed Administrator to be granted from here.</strong>
+        Those assignments are blocked and will be skipped. Someone with access to each
+        site’s WP Admin can enable it under DE Monitoring → User management.
+      </div>` : ""}
 
       ${demotions.length ? `
         <div class="wpu-warnbox">

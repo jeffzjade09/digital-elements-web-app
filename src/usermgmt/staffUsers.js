@@ -5,7 +5,7 @@
 // two when the same person has both.
 
 import { query } from "../db.js";
-import { assertDefaultRole, normalizeRoleSlug } from "./roles.js";
+import { assertDefaultRole, normalizeRoleSlug, knownRoleSlugs } from "./roles.js";
 
 export const AGENCY_DOMAIN = "digitalelementsgroup.com";
 
@@ -44,7 +44,9 @@ export function displayLabel(r) {
 /**
  * The WordPress role this person should get, before any per-website override:
  * their own default if set, otherwise their team's, otherwise subscriber.
- * Least privilege is the floor — never administrator by inheritance.
+ * Administrator may be a default, by policy. What protects the client is not
+ * the role's absence from this list but the per-site users:admin scope and the
+ * confirmation before a job runs.
  */
 export function effectiveRole(r) {
   return normalizeRoleSlug(r.default_wp_role || r.team_default_wp_role || "subscriber");
@@ -129,7 +131,7 @@ export async function createStaff(input, createdBy = null) {
   const overrideDomain = d.overrideDomain === true;
   const email = assertEmailAllowed(d.email, { overrideDomain });
   const isExternal = !email.endsWith(`@${AGENCY_DOMAIN}`);
-  const role = d.defaultWpRole ? assertDefaultRole(d.defaultWpRole) : null;
+  const role = d.defaultWpRole ? assertDefaultRole(d.defaultWpRole, await knownRoleSlugs()) : null;
 
   if (d.teamId) await assertTeamExists(d.teamId);
 
@@ -172,7 +174,7 @@ export async function updateStaff(id, input) {
 
   const role = d.defaultWpRole === undefined
     ? current.defaultWpRole
-    : (!d.defaultWpRole ? null : assertDefaultRole(d.defaultWpRole));
+    : (!d.defaultWpRole ? null : assertDefaultRole(d.defaultWpRole, await knownRoleSlugs()));
 
   const teamId = d.teamId === undefined ? current.teamId : (d.teamId || null);
   if (teamId && teamId !== current.teamId) await assertTeamExists(teamId);

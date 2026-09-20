@@ -35,9 +35,17 @@ const SITE_ROLES = [
   { slug: "shop_manager", name: "Shop manager", adminLike: false, siteAdmin: false },
 ];
 
+// A site that has granted users:admin — its own administrator switched it on.
 const READY = {
   readiness: READINESS.READY, message: "Ready", pluginVersion: "2.6.0",
   requiredApiVersion: 1, capabilities: ["users.read"],
+  scopes: ["users:read", "users:write", "users:admin", "content:reassign"],
+};
+// A site that has NOT. This is the default state, and the gate that survived
+// the policy change allowing Administrator as a default role.
+const READY_NO_ADMIN_SCOPE = {
+  ...READY,
+  scopes: ["users:read", "users:write", "content:reassign"],
 };
 const OUTDATED = {
   readiness: READINESS.PLUGIN_UPDATE_REQUIRED,
@@ -71,8 +79,15 @@ eq("subscriber is the floor",
    resolveRequestedRole({ ...STAFF, teamDefaultWpRole: null }, "site-1").role, "subscriber");
 eq("an override for a different site is ignored",
    resolveRequestedRole(STAFF, "site-1", { "site-2": "author" }).role, "editor");
-// Administrator can only ever arrive as an explicit override — never inherited.
-eq("administrator is reachable only by override",
+// POLICY: Administrator can now be inherited from a team default. The gate is
+// no longer "you can't choose this" but "the client must have allowed it, and
+// you must say so once before the job runs".
+eq("administrator can be inherited from a team",
+   resolveRequestedRole({ ...STAFF, teamDefaultWpRole: "administrator" }, "site-1").role, "administrator");
+eq("...credited to the team", resolveRequestedRole({ ...STAFF, teamDefaultWpRole: "administrator" }, "site-1").source, "team");
+eq("...or set per person",
+   resolveRequestedRole({ ...STAFF, defaultWpRole: "administrator" }, "site-1").source, "user");
+eq("...or still as an explicit override",
    resolveRequestedRole(STAFF, "site-1", { "site-1": "administrator" }).source, "override");
 
 /* ------------------------------------------------- role availability ------ */
@@ -174,7 +189,41 @@ const adminRole = run({
   requestedRole: "administrator",
 });
 ok("assigning administrator is flagged", adminRole.needsAdminConfirmation === true);
-eq("...but is still a normal create", adminRole.action, ACTION.CREATE);
+eq("...and on a site that allows it, is a normal create", adminRole.action, ACTION.CREATE);
+
+console.log("\n--- a site that hasn't allowed it blocks Administrator ---");
+// Administrator may now be a team default, so an administering role reaches far
+// more sites than before — which makes this gate more important, not less. The
+// switch lives in each site's own DE Monitoring panel; the dashboard can't
+// flip it, and a job must not discover the refusal one site at a time.
+const adminNoScope = run({
+  capabilities: READY_NO_ADMIN_SCOPE,
+  roleCheck: checkRoleAvailability("administrator", SITE_ROLES),
+  requestedRole: "administrator",
+});
+eq("it is blocked", adminNoScope.action, ACTION.BLOCKED);
+eq("...with a code the UI can group on", adminNoScope.blockers[0].code, "admin_scope_denied");
+ok("...explaining where the switch lives", /DE Monitoring/.test(adminNoScope.blockers[0].message));
+ok("...and still reporting the confirmation flag", adminNoScope.needsAdminConfirmation === true);
+
+// The scope gate must apply ONLY to administering roles — an ordinary
+// assignment to a site without users:admin is unaffected.
+eq("an ordinary role is unaffected by that scope",
+   run({ capabilities: READY_NO_ADMIN_SCOPE }).action, ACTION.CREATE);
+eq("...and so is an author", run({
+  capabilities: READY_NO_ADMIN_SCOPE,
+  roleCheck: checkRoleAvailability("author", SITE_ROLES), requestedRole: "author",
+}).action, ACTION.CREATE);
+
+// A site we can't reach isn't judged on its scopes — it is already blocked for
+// a better reason, and claiming "hasn't allowed Administrator" would be a lie.
+const adminOutdated = run({
+  capabilities: OUTDATED,
+  roleCheck: checkRoleAvailability("administrator", SITE_ROLES), requestedRole: "administrator",
+});
+ok("an outdated site blocks on the plugin, not on the scope",
+   adminOutdated.blockers.every((b) => b.code !== "admin_scope_denied"),
+   adminOutdated.blockers.map((b) => b.code).join(","));
 
 // THE CASE THAT MAKES THE TIERS NECESSARY. Editor holds unfiltered_html on
 // stock WordPress and is every team's default role. If the confirmation keyed
@@ -209,6 +258,48 @@ const lookupFailed = run({
 });
 eq("it blocks instead", lookupFailed.action, ACTION.BLOCKED);
 ok("...saying it couldn't check", /Couldn't check existing accounts/.test(lookupFailed.blockers[0].message));
+
+console.log("\n--- the confirmation is once per job, counted in websites ---");
+{
+  // Extracted from summarize(): what the single confirmation states.
+  function summarize(rows) {
+    const adminSites = new Set();
+    const adminBlockedSites = new Set();
+    let needsAdminConfirmation = 0;
+    for (const r of rows) {
+      if (r.needsAdminConfirmation) {
+        needsAdminConfirmation++;
+        if (r.action !== ACTION.BLOCKED) adminSites.add(r.websiteId);
+      }
+      if (r.blockers.some((b) => b.code === "admin_scope_denied")) adminBlockedSites.add(r.websiteId);
+    }
+    return { needsAdminConfirmation, adminSiteCount: adminSites.size, adminBlockedSiteCount: adminBlockedSites.size };
+  }
+
+  // Five people onto two websites, all Administrator: ten assignments, but the
+  // question worth asking is about two websites, asked once.
+  const rows = [];
+  for (const person of ["a", "b", "c", "d", "e"]) {
+    for (const websiteId of ["w1", "w2"]) {
+      rows.push({ websiteId, staffUserId: person, action: ACTION.CREATE, needsAdminConfirmation: true, blockers: [] });
+    }
+  }
+  const sum = summarize(rows);
+  eq("ten assignments are flagged", sum.needsAdminConfirmation, 10);
+  eq("...but they are two websites", sum.adminSiteCount, 2);
+  ok("so one confirmation covers the job", sum.adminSiteCount < sum.needsAdminConfirmation);
+
+  // A blocked row must not be counted as something the confirmation grants —
+  // it isn't going to happen.
+  rows.push({ websiteId: "w3", staffUserId: "f", action: ACTION.BLOCKED, needsAdminConfirmation: true,
+              blockers: [{ code: "admin_scope_denied", message: "x" }] });
+  const sum2 = summarize(rows);
+  eq("a blocked site is not counted as granted", sum2.adminSiteCount, 2);
+  eq("...it is counted as blocked", sum2.adminBlockedSiteCount, 1);
+
+  const none = summarize([{ websiteId: "w1", staffUserId: "a", action: ACTION.CREATE, needsAdminConfirmation: false, blockers: [] }]);
+  eq("a job with no administering roles needs no confirmation", none.adminSiteCount, 0);
+}
 
 console.log(fail ? `\n${fail} assertion(s) failed` : "\nAll assertions passed");
 process.exit(fail ? 1 : 0);
