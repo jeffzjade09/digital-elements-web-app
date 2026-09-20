@@ -77,7 +77,10 @@ ok("002 exists", !!seed);
 
 const TEAMS = ["SEO", "Content", "PPC", "Web Development", "Admin"];
 for (const t of TEAMS) ok(`seeds the ${t} team`, seed.sql.includes(`'${t}'`));
-eq("exactly five teams", (seed.sql.match(/'editor'\),?\n/g) || []).length, 5);
+// Counted on the row terminator, not a line break: git normalizes these files
+// to CRLF on a Windows checkout, so an assertion that depends on \n passes only
+// for whoever happened to write the file.
+eq("exactly five teams", (seed.sql.match(/'editor'\)/g) || []).length, 5);
 
 const ROSTER = {
   seo: ["jason", "npappas", "jhaley", "bhalinar", "wsmall"],
