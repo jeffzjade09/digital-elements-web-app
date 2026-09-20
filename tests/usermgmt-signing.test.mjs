@@ -17,7 +17,7 @@ import {
   encryptSecret, decryptSecret, generateCredential, credentialView,
   normalizeCode, isConfigured, DEFAULT_SCOPES, ALL_SCOPES,
 } from "../src/usermgmt/credentials.js";
-import { deV2Base, assertSafeUrl, WpError, NAMESPACE } from "../src/usermgmt/wpClient.js";
+import { deV2Base, assertSafeUrl, isBlockedAddress, WpError, NAMESPACE } from "../src/usermgmt/wpClient.js";
 import { REQUIRED_API_VERSION, READINESS, assertCapable } from "../src/usermgmt/capabilities.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -146,18 +146,65 @@ eq("derived from the site URL", deV2Base({ url: "https://example.com/" }), `http
 eq("a custom helper endpoint is respected",
    deV2Base({ url: "https://example.com", helper: { endpoint: "https://example.com/custom/wpmonitor/v1/status" } }),
    `https://example.com/custom/${NAMESPACE}`);
+// The endpoint is matched against the parsed pathname. Matching the raw string
+// with a greedy pattern would let a query string masquerade as the base path.
+eq("a query string is not mistaken for the base path",
+   deV2Base({ url: "https://example.com", helper: { endpoint: "https://example.com/?x=/wpmonitor/v1/status" } }),
+   `https://example.com/wp-json/${NAMESPACE}`);
+eq("an unparseable endpoint falls back to the site URL",
+   deV2Base({ url: "https://example.com", helper: { endpoint: "not a url" } }),
+   `https://example.com/wp-json/${NAMESPACE}`);
 throws("a site with no URL is refused", () => deV2Base({}), /no URL/);
 
-console.log("\n--- the SSRF guard ---");
-const allowLocal = process.env.UM_ALLOW_LOCAL_SITES;
-delete process.env.UM_ALLOW_LOCAL_SITES;
-// assertSafeUrl reads the flag at import time, so only the always-on rules are
-// asserted here; the local-host rule is covered by its own constant below.
+console.log("\n--- the SSRF guard: URL shape ---");
 ok("https is allowed", !!assertSafeUrl("https://example.com/wp-json/de/v2"));
+ok("a public IP literal is allowed", !!assertSafeUrl("https://203.0.113.10/wp-json/de/v2"));
 throws("a non-http scheme is refused", () => assertSafeUrl("file:///etc/passwd"), /http or https/);
 throws("garbage is refused", () => assertSafeUrl("not a url"), /isn't valid/);
 throws("credentials in the URL are refused", () => assertSafeUrl("https://user:pw@example.com/"), /credentials/);
-if (allowLocal !== undefined) process.env.UM_ALLOW_LOCAL_SITES = allowLocal;
+
+console.log("\n--- the SSRF guard: private address ranges ---");
+// Matching the hostname as a string misses most of these, so the address is
+// parsed and range-checked. Each entry here is a form that a string deny-list
+// lets through.
+for (const host of [
+  "127.0.0.1", "10.0.0.1", "172.16.0.1", "172.31.255.255", "192.168.1.1",
+  "169.254.169.254",            // cloud instance metadata
+  "100.64.1.5",                 // RFC 6598 CGNAT
+  "0.0.0.0", "198.18.0.1", "224.0.0.1",
+  "[::1]",                      // IPv6 loopback
+  "[::ffff:127.0.0.1]",         // IPv4-mapped loopback
+  "[fd00::1]",                  // IPv6 unique local
+  "[fe80::1]",                  // IPv6 link-local
+  "[ff02::1]",                  // IPv6 multicast
+]) {
+  throws(`${host} is refused`, () => assertSafeUrl(`http://${host}/wp-json/de/v2`), /private network/);
+}
+// WHATWG URL normalizes these to 127.0.0.1 before we ever see them, but assert
+// it rather than relying on it.
+throws("a decimal-encoded loopback is refused", () => assertSafeUrl("http://2130706433/"), /private network/);
+throws("a hex-encoded loopback is refused", () => assertSafeUrl("http://0x7f000001/"), /private network/);
+
+for (const host of ["203.0.113.10", "8.8.8.8", "[2606:4700::1111]"]) {
+  ok(`${host} is allowed`, !!assertSafeUrl(`https://${host}/wp-json/de/v2`));
+}
+
+console.log("\n--- the SSRF guard: local-only hostnames ---");
+for (const host of ["localhost", "client.test", "site.local", "box.internal", "host.intranet"]) {
+  throws(`${host} is refused`, () => assertSafeUrl(`http://${host}/wp-json/de/v2`), /private network/);
+}
+// A name that merely contains a blocked word is a normal public name.
+ok("a lookalike public name is allowed", !!assertSafeUrl("https://testsite.com/wp-json/de/v2"));
+ok("...and so is one ending in the word", !!assertSafeUrl("https://mylocal.com/wp-json/de/v2"));
+
+console.log("\n--- address classification ---");
+ok("an IPv4-mapped loopback is seen as loopback", isBlockedAddress("::ffff:127.0.0.1"));
+ok("the compressed hex form too", isBlockedAddress("::ffff:7f00:1"));
+ok("a mapped public address is not blocked", isBlockedAddress("::ffff:203.0.113.10") === false);
+ok("a public IPv4 is not blocked", isBlockedAddress("203.0.113.10") === false);
+ok("a public IPv6 is not blocked", isBlockedAddress("2606:4700::1111") === false);
+ok("a non-address is treated as blocked", isBlockedAddress("example.com"));
+ok("empty input is treated as blocked", isBlockedAddress(""));
 
 console.log("\n--- capability gating ---");
 eq("this app speaks contract revision 1", REQUIRED_API_VERSION, 1);

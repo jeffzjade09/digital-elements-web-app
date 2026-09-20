@@ -7,6 +7,9 @@
 // body, so failures are mapped to a fixed set of codes with messages written
 // for an administrator.
 
+import net from "node:net";
+import dns from "node:dns/promises";
+
 import { getSigningCredential, isConfigured } from "./credentials.js";
 import { signRequest } from "./signing.js";
 
@@ -14,11 +17,13 @@ export const NAMESPACE = "de/v2";
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 // Local WordPress installs are the supported way to test this (see
-// docs/user-management.md). They are blocked by default so a misconfigured
-// website row can't be used to make the server call its own network.
+// docs/user-management.md). They are blocked by default so a website row —
+// which a user with only manageWebsites can edit — can't be used to make this
+// server reach into its own network.
 const ALLOW_LOCAL = process.env.UM_ALLOW_LOCAL_SITES === "1";
 
-const PRIVATE_HOST = /^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$|.*\.(test|local|localhost|internal)$)/i;
+// Hostnames that always mean "this machine" regardless of what DNS says.
+const LOCAL_NAMES = /^(localhost|.*\.(localhost|local|test|internal|intranet|home\.arpa))$/i;
 
 export class WpError extends Error {
   constructor(code, message, { status = 0, site = null, retryable = false, detail = null } = {}) {
@@ -41,15 +46,78 @@ export class WpError extends Error {
  */
 export function deV2Base(site) {
   const custom = site?.helper?.endpoint || "";
-  const m = custom.match(/^(.*\/)wpmonitor\/v1\/[^/]*\/?$/);
-  if (m) return m[1] + NAMESPACE;
+  if (custom) {
+    // Matched against the parsed pathname, not the raw string: a greedy match
+    // over the whole URL would happily treat a query string as the base path.
+    let parsed = null;
+    try { parsed = new URL(custom); } catch { parsed = null; }
+    const m = parsed && parsed.pathname.match(/^(.*\/)wpmonitor\/v1\/[^/]*\/?$/);
+    if (m) return `${parsed.origin}${m[1]}${NAMESPACE}`;
+  }
   const root = String(site?.url || "").replace(/\/+$/, "");
   if (!root) throw new WpError("no_url", "This website has no URL configured.");
   return `${root}/wp-json/${NAMESPACE}`;
 }
 
-// Refuses anything that isn't a plain http(s) URL to a public host. Credentials
-// embedded in the URL are refused outright rather than silently sent.
+/**
+ * Is this literal IP address one we must never connect to?
+ *
+ * Matching on the hostname string misses the forms that matter: WHATWG
+ * normalizes `::ffff:127.0.0.1` to `::ffff:7f00:1`, and IPv6 unique-local,
+ * link-local and CGNAT ranges look nothing like their IPv4 equivalents. So the
+ * address is parsed and range-checked instead of pattern-matched.
+ */
+export function isBlockedAddress(address) {
+  const ip = String(address || "").replace(/^\[|\]$/g, "").toLowerCase();
+  const family = net.isIP(ip);
+  if (family === 4) return isBlockedV4(ip);
+  if (family === 6) return isBlockedV6(ip);
+  return true; // not an IP literal; names are resolved and checked separately
+}
+
+function isBlockedV4(ip) {
+  const o = ip.split(".").map(Number);
+  if (o.length !== 4 || o.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+  const [a, b] = o;
+  return (
+    a === 0 ||                               // "this network"
+    a === 10 ||                              // RFC 1918
+    a === 127 ||                             // loopback
+    (a === 100 && b >= 64 && b <= 127) ||    // RFC 6598 CGNAT
+    (a === 169 && b === 254) ||              // link-local, incl. cloud metadata
+    (a === 172 && b >= 16 && b <= 31) ||     // RFC 1918
+    (a === 192 && b === 168) ||              // RFC 1918
+    (a === 192 && b === 0) ||                // IETF protocol assignments
+    (a === 198 && (b === 18 || b === 19)) || // benchmarking
+    a >= 224                                 // multicast, reserved, broadcast
+  );
+}
+
+function isBlockedV6(ip) {
+  // An IPv4-mapped address is really an IPv4 destination, so judge it by the
+  // IPv4 rules rather than letting it through as "some IPv6 address".
+  const dotted = ip.match(/^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) return isBlockedV4(dotted[1]);
+  const hex = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16), lo = parseInt(hex[2], 16);
+    return isBlockedV4([hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join("."));
+  }
+  return (
+    ip === "::" || ip === "::1" || // unspecified, loopback
+    /^f[cd]/.test(ip) ||           // fc00::/7 unique local
+    /^fe[89ab]/.test(ip) ||        // fe80::/10 link-local
+    /^ff/.test(ip)                 // multicast
+  );
+}
+
+/**
+ * Refuses anything that isn't a plain http(s) URL to a public host.
+ *
+ * Synchronous, so it only judges what the URL says. A hostname that RESOLVES to
+ * a private address is caught by assertResolvesPublicly() — both run before any
+ * request goes out.
+ */
 export function assertSafeUrl(url) {
   let parsed;
   try { parsed = new URL(url); } catch { throw new WpError("bad_url", "This website's URL isn't valid."); }
@@ -59,10 +127,58 @@ export function assertSafeUrl(url) {
   if (parsed.username || parsed.password) {
     throw new WpError("bad_url", "This website's URL must not contain credentials.");
   }
-  if (!ALLOW_LOCAL && PRIVATE_HOST.test(parsed.hostname)) {
-    throw new WpError("private_host", "That address is on a private network. Set UM_ALLOW_LOCAL_SITES=1 to allow local test sites.");
+  if (ALLOW_LOCAL) return parsed;
+
+  const host = parsed.hostname;
+  if (LOCAL_NAMES.test(host)) {
+    throw new WpError("private_host", privateHostMessage(host));
+  }
+  if (net.isIP(host.replace(/^\[|\]$/g, "")) && isBlockedAddress(host)) {
+    throw new WpError("private_host", privateHostMessage(host));
   }
   return parsed;
+}
+
+/**
+ * Resolves a hostname and refuses it if any answer is a private address.
+ *
+ * A name is only as trustworthy as what it resolves to: `localtest.me` is a
+ * perfectly ordinary public name that points at 127.0.0.1, and nothing about
+ * the string gives that away.
+ *
+ * Every returned address must be public, not just the first — a name with both
+ * a public and a private record must not get through on the strength of the
+ * public one. Resolution failure is not treated as a block: an unresolvable
+ * host simply fails as unreachable when the request is attempted.
+ *
+ * This narrows the window rather than closing it: the name is resolved again by
+ * the HTTP client when it connects, so a record that changes in between is
+ * still theoretically possible. Closing that completely means pinning the
+ * connection to the validated address, which needs a custom dispatcher; the
+ * URLs here are only settable by signed-in staff, so the residual risk is
+ * small and stated rather than papered over.
+ */
+export async function assertResolvesPublicly(url) {
+  if (ALLOW_LOCAL) return true;
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(host)) return true; // already range-checked by assertSafeUrl
+
+  let answers;
+  try {
+    answers = await dns.lookup(host, { all: true, verbatim: true });
+  } catch {
+    return true; // unresolvable: let the request itself fail as unreachable
+  }
+  for (const { address } of answers) {
+    if (isBlockedAddress(address)) {
+      throw new WpError("private_host", privateHostMessage(host));
+    }
+  }
+  return true;
+}
+
+function privateHostMessage(host) {
+  return `${host} resolves to a private network address. Set UM_ALLOW_LOCAL_SITES=1 only if this is a local test site.`;
 }
 
 /**
@@ -103,6 +219,7 @@ export async function callSite(site, {
     }
   }
   assertSafeUrl(url.toString());
+  await assertResolvesPublicly(url.toString());
 
   const { headers } = signRequest({
     keyId: cred.keyId,
@@ -196,6 +313,9 @@ function authMessage(code, site) {
 export async function probeCapabilities(site, { timeoutMs = 10_000 } = {}) {
   const url = `${deV2Base(site)}/capabilities`;
   assertSafeUrl(url);
+  // This request carries the site's monitoring license key as a bearer token,
+  // so where it goes matters as much as what it asks for.
+  await assertResolvesPublicly(url);
   const token = site?.helper?.token || "";
 
   let res;

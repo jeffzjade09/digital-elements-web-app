@@ -212,7 +212,30 @@ information, never anything about a user.
 | Variable | Purpose |
 |---|---|
 | `USER_MGMT_ENC_KEY` | 32 bytes (base64 or hex) encrypting stored credentials. Without it, teams and staff work and the Websites tab reports the feature unconfigured. **Losing it means re-enrolling every site.** |
-| `UM_ALLOW_LOCAL_SITES` | `1` to allow calls to localhost/`*.test`. Off by default so a mistyped website URL can't make the server call its own network. Needed for local WordPress testing. |
+| `UM_ALLOW_LOCAL_SITES` | `1` to allow calls to localhost/`*.test`. Off by default so a website URL can't make the server call its own network. Needed for local WordPress testing. |
+
+### Where outbound requests may go
+
+A website's URL is editable by anyone with `manageWebsites` — a lower bar than
+`manageWpUsers` — and the capabilities probe carries that site's monitoring
+license key. So before any request leaves the server, the target is checked
+twice:
+
+1. **By address.** The host is parsed and range-checked, not string-matched:
+   loopback, RFC 1918, CGNAT, link-local (including cloud metadata at
+   `169.254.169.254`), IPv6 unique-local and link-local, and IPv4-mapped IPv6
+   such as `::ffff:127.0.0.1` are all refused. Hostnames ending in `.local`,
+   `.test`, `.internal` or `.intranet`, and `localhost`, are refused too.
+2. **By resolution.** A hostname is resolved and *every* answer must be public.
+   `localtest.me` is an ordinary public name that points at `127.0.0.1`, and
+   nothing about the string says so.
+
+This narrows the window rather than closing it: the HTTP client resolves the
+name again when it connects, so a record that changes in between is still
+theoretically possible. Closing that fully means pinning the connection to the
+validated address, which needs a custom dispatcher. Given the URL is only
+settable by signed-in staff, that residual risk is accepted and stated here
+rather than left implied.
 
 ## API
 
