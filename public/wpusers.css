@@ -110,3 +110,8 @@
 .wpu-blocker { font-size: 11.5px; color: var(--err-text); margin-top: 5px; line-height: 1.45; }
 .wpu-row-blocked td { opacity: .85; }
 #wpuModal .modal-panel { width: min(940px, 100%); }
+
+/* Job progress */
+.wpu-progress { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.wpu-progress-bar { height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s ease; }
+.wpu-warn-line { font-size: 11.5px; color: var(--warn); margin-top: 5px; line-height: 1.45; }

@@ -253,6 +253,12 @@ tests/usermgmt-preflight.test.mjs   what the review screen predicts for every
 tests/usermgmt-users.test.php       the read routes: scope enforcement, and that
                                     no password hash or unrelated user meta can
                                     leave a client site
+tests/usermgmt-write.test.php       every write guard: managed-only, the role
+                                    whitelist, admin confirmation, the last
+                                    administrator, idempotent replay, and that
+                                    no generated password reaches a response
+tests/usermgmt-sync.test.mjs        the idempotency key, retry-only-on-transient,
+                                    and the bounded concurrency executor
 ```
 
 ### Live check against a real WordPress install
