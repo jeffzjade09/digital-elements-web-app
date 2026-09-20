@@ -195,6 +195,25 @@ Run it after any plugin change — otherwise `/api/plugin/manifest` advertises a
 version the downloadable zip doesn't contain, and WordPress will offer the same
 update forever.
 
+## WordPress user management
+
+Settings → **WP Users** manages the agency's WordPress accounts across every
+connected site from one place: teams of staff, their default WordPress roles,
+and an activity log of every administrative change.
+
+Access is governed by its own `manageWpUsers` permission — separate from
+`manageUsers`, which only governs who may sign in to this dashboard. It is held
+by anyone with the `admin` role plus an explicit allow-list stored in
+`app_settings.wp_user_managers`.
+
+The roster of teams and staff is seeded by a migration and fully editable
+afterwards. Database changes for this feature live in `db/migrations/`, applied
+once each at boot by `src/migrate.js` and recorded in `schema_migrations`;
+never edit a migration that has already run, add a new one.
+
+See [docs/user-management.md](docs/user-management.md) for the data model, the
+API, the safety rules, and the roadmap for the phases that talk to WordPress.
+
 ## Tests
 
 ```bash
@@ -211,6 +230,11 @@ tests/optimize-images.test.php      image audit: thresholds, chained estimates,
 tests/render-image-audit.test.mjs   dashboard renderer: formatting parity with
                                     the PHP side, partial-scan warnings, and
                                     escaping of file names from client sites
+tests/usermgmt-policy.test.mjs      user management: the permission model and
+                                    grant list, role vocabulary, agency-domain
+                                    restriction, and audit redaction
+tests/usermgmt-migrations.test.mjs  migration ordering, nothing destructive in
+                                    them, and the seeded roster
 ```
 
 ### Live check against a real WordPress install
@@ -238,6 +262,9 @@ Run it after any plugin change, and extend it as new optimizations land.
 ```
 src/
   server.js        Express API + serves the dashboard
+  migrate.js       ordered SQL migrations, applied once at boot
+  usermgmt/        WordPress user management (framework-free modules)
+  routes/          Express routers for the newer features
   scheduler.js     cron sweeps + alert dispatch
   runner.js        runs every check per site, rolls up status
   store.js         config + results persistence
@@ -246,6 +273,8 @@ src/
   cli.js           one-off terminal sweep
   checks/          one module per check
 public/index.html  the dashboard UI
+public/wpusers.*   the WP Users interface (JS + CSS)
+db/migrations/     ordered schema + seed migrations
 scripts/           build tooling (plugin zip)
 tests/             test suites + runner
 config/sites.json  your sites (you create this)

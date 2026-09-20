@@ -85,3 +85,68 @@ create table if not exists "session" (
 alter table "session" drop constraint if exists "session_pkey";
 alter table "session" add constraint "session_pkey" primary key ("sid") not deferrable initially immediate;
 create index if not exists "IDX_session_expire" on "session" ("expire");
+
+-- ===========================================================================
+-- Centralized WordPress user management
+--
+-- Reference only. These tables are created by the ordered migrations in
+-- db/migrations/, which the app runs at boot (see src/migrate.js) — you do NOT
+-- need to run the statements below by hand. They are reproduced here so this
+-- file stays a complete picture of the schema.
+-- ===========================================================================
+
+-- Applied-migration ledger.
+create table if not exists schema_migrations (
+  version    text primary key,
+  checksum   text not null,
+  applied_at timestamptz not null default now()
+);
+
+-- Teams of internal agency staff. Named "teams" rather than "departments"
+-- because Nexus already uses "departments" for the client product catalog.
+create table if not exists teams (
+  id              uuid primary key default gen_random_uuid(),
+  name            text not null,
+  slug            text not null unique,
+  description     text,
+  default_wp_role text not null default 'editor',
+  created_by      uuid references app_users(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+-- The roster synchronized to client WordPress sites. Separate from app_users,
+-- which is the dashboard sign-in allow-list.
+create table if not exists staff_users (
+  id              uuid primary key default gen_random_uuid(),
+  email           text not null,
+  first_name      text,
+  last_name       text,
+  display_name    text,
+  team_id         uuid references teams(id) on delete set null,
+  default_wp_role text,
+  status          text not null default 'active' check (status in ('active','disabled')),
+  app_user_id     uuid references app_users(id) on delete set null,
+  domain_override boolean not null default false,
+  created_by      uuid references app_users(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+-- Administrative action history. before/after are redacted snapshots —
+-- secrets and passwords never reach this table.
+create table if not exists audit_log (
+  id            uuid primary key default gen_random_uuid(),
+  actor_user_id uuid references app_users(id) on delete set null,
+  actor_email   text,
+  action        text not null,
+  entity_type   text,
+  entity_id     text,
+  website_id    uuid references websites(id) on delete set null,
+  target_email  text,
+  before        jsonb,
+  after         jsonb,
+  result        text,
+  ip            text,
+  at            timestamptz not null default now()
+);

@@ -573,6 +573,7 @@
   .sec-list li.sev-high .sec-dot { background: var(--fail); }
   .sec-list li.sev-med .sec-dot { background: var(--warn); }
 </style>
+<link rel="stylesheet" href="/wpusers.css" />
 </head>
 <body>
 <div class="app">
@@ -587,6 +588,7 @@
       <a id="nav-landing" onclick="showView('landing')">__ICON_LAYERS__ Landing pages</a>
       <a id="nav-mytasks" onclick="showView('mytasks')">__ICON_TASKS__ My tasks</a>
       <a id="nav-users" style="display:none" onclick="openUsers()">__ICON_USERS__ Users</a>
+      <a id="nav-wpusers" style="display:none" onclick="showView('wpusers')">__ICON_USERS__ WP Users</a>
       <a id="nav-settings" style="display:none" onclick="showView('settings')">__ICON_GEAR__ Settings</a>
     </nav>
     <div class="side-foot">
@@ -649,6 +651,11 @@
         </div>
         <div id="myTasksMeta" class="foot" style="text-align:left;margin:0 0 12px"></div>
         <div id="myTasksList"></div>
+      </section>
+
+      <section class="view" id="view-wpusers" hidden>
+        <div class="view-head"><h2>WordPress users</h2></div>
+        <div id="wpusersRoot"></div>
       </section>
 
       <section class="view" id="view-settings" hidden>
@@ -1331,9 +1338,9 @@ function showView(name) {
     currentSiteId = null;
     history.pushState({}, "", "/");
   }
-  const views = ["dashboard", "sitedetail", "websites", "landing", "mytasks", "settings"];
+  const views = ["dashboard", "sitedetail", "websites", "landing", "mytasks", "wpusers", "settings"];
   views.forEach((v) => { const el = document.getElementById("view-" + v); if (el) el.hidden = v !== name; });
-  const titles = { dashboard: "Dashboard", websites: "Websites", landing: "Landing pages", mytasks: "My tasks", settings: "Settings", sitedetail: "Website detail" };
+  const titles = { dashboard: "Dashboard", websites: "Websites", landing: "Landing pages", mytasks: "My tasks", wpusers: "WordPress users", settings: "Settings", sitedetail: "Website detail" };
   document.getElementById("pageTitle").textContent = titles[name] || "Dashboard";
   views.forEach((v) => {
     const active = v === name || (name === "sitedetail" && v === "dashboard");
@@ -1343,6 +1350,8 @@ function showView(name) {
   if (name === "websites") renderWebsitesList();
   if (name === "landing") refreshLanding().then(renderLanding);
   if (name === "mytasks") renderMyTasks();
+  // renderWpUsers lives in wpusers.js, which loads after this script.
+  if (name === "wpusers" && typeof renderWpUsers === "function") renderWpUsers();
   if (name === "settings") renderSettings();
   if (name === "dashboard" && ME.perms.manageWebsites) loadDashTraffic();
 }
@@ -1407,6 +1416,8 @@ async function boot() {
   document.getElementById("mAvatar").title = name;
   if (ME.perms.manageWebsites) { document.getElementById("addSiteBtn").style.display = "inline-flex"; document.getElementById("addSiteBtn2").style.display = "inline-flex"; document.getElementById("addLandingBtn").style.display = "inline-flex"; }
   if (ME.perms.manageUsers) { document.getElementById("nav-users").style.display = "flex"; document.getElementById("usersBtn").style.display = "inline-flex"; }
+  // manageWpUsers is a separate grant from manageUsers — see src/auth.js.
+  if (ME.perms.manageWpUsers) document.getElementById("nav-wpusers").style.display = "flex";
   // Settings is available to everyone (personal preferences); monitoring options inside stay admin-only.
   document.getElementById("nav-settings").style.display = "flex";
   document.getElementById("settingsBtn").style.display = "inline-flex";
@@ -2334,7 +2345,7 @@ const CICON = { https: ICON.lock, ssl: ICON.shield, cloudflare: ICON.cloud, ctm:
 // Swap icon placeholders in the nav/menu for real SVGs.
 function initIcons() {
   const map = {
-    "nav-dashboard": ICON.dash + " Dashboard", "nav-websites": ICON.globe + " Websites", "nav-landing": ICON.layers + " Landing pages", "nav-mytasks": ICON.checkSquare + " My tasks" + '<span class="badge-count" id="mytasks-count" style="display:none"></span>', "nav-users": ICON.users + " Users", "nav-settings": ICON.gear + " Settings",
+    "nav-dashboard": ICON.dash + " Dashboard", "nav-websites": ICON.globe + " Websites", "nav-landing": ICON.layers + " Landing pages", "nav-mytasks": ICON.checkSquare + " My tasks" + '<span class="badge-count" id="mytasks-count" style="display:none"></span>', "nav-users": ICON.users + " Users", "nav-wpusers": ICON.users + " WP Users", "nav-settings": ICON.gear + " Settings",
     "bn-dashboard": ICON.dash + "Dashboard", "bn-websites": ICON.globe + "Websites", "bn-landing": ICON.layers + "Landing", "bn-mytasks": ICON.checkSquare + '<span class="bn-badge" id="bn-mytasks-count" style="display:none"></span>' + "Tasks", "bn-signout": ICON.out + "Sign out",
     "runBtn": ICON.run + " Run checks", "addSiteBtn": ICON.plus + " Website", "addSiteBtn2": ICON.plus + " Add website", "addLandingBtn": ICON.plus + " Landing page", "settingsBtn": ICON.gear, "usersBtn": ICON.users, "searchIc": ICON.search,
   };
@@ -2436,5 +2447,6 @@ boot();
     <div class="modal-body" id="ep-body"></div>
   </div>
 </div>
+<script src="/wpusers.js"></script>
 </body>
 </html>
