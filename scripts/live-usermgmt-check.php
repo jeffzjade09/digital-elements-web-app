@@ -20,10 +20,10 @@
  * SAFETY: refuses to run against anything but a local install, and restores the
  * site's enrollment options afterwards.
  *
- * The write-path section DOES create real users on the local install — there is
- * no other way to prove the guards hold against a real user table — and removes
- * every one of them again through a shutdown handler, even if the script dies
- * part way through. It never modifies a user it did not create, with one
+ * The write and deletion sections DO create real users AND real content on the
+ * local install — there is no other way to prove the guards hold against a real
+ * database — and remove every one of them again through shutdown handlers, even
+ * if the script dies part way through. It never modifies a user it did not create, with one
  * deliberate exception: it temporarily marks an existing sole administrator as
  * managed to prove the last-administrator guard refuses to demote them, then
  * restores the flag. Nothing else on the site is touched.
@@ -79,6 +79,10 @@ function ok($label, $cond, $extra = '') {
     if ($cond) { echo "PASS  $label\n"; }
     else { $fail++; echo "FAIL  $label" . ($extra ? "  ($extra)" : '') . "\n"; }
 }
+/** Strict integer comparison, so a stringy "6" can never pass for 6. */
+function eq_int($label, $a, $b) {
+    ok($label, $a === $b, "expected $b, got " . var_export($a, true));
+}
 
 echo "\nWordPress " . get_bloginfo('version') . " at $wp_root ($host)\n";
 echo "Plugin " . DEHELED_VERSION . ", de/v2 contract revision " . DEHELED_UM_API_VERSION . "\n";
@@ -113,6 +117,9 @@ ok('de/v2/users/{id} is registered', isset($routes['/de/v2/users/(?P<id>\d+)']))
 ok('de/v2/users/{id}/link is registered', isset($routes['/de/v2/users/(?P<id>\d+)/link']));
 ok('de/v2/users/{id}/unlink is registered', isset($routes['/de/v2/users/(?P<id>\d+)/unlink']));
 ok('de/v2/users/{id}/password-reset is registered', isset($routes['/de/v2/users/(?P<id>\d+)/password-reset']));
+ok('de/v2/users/{id}/content is registered', isset($routes['/de/v2/users/(?P<id>\d+)/content']));
+ok('de/v2/users/{id}/reassign is registered', isset($routes['/de/v2/users/(?P<id>\d+)/reassign']));
+ok('de/v2/users/{id} accepts DELETE', isset($routes['/de/v2/users/(?P<id>\d+)']) && count($routes['/de/v2/users/(?P<id>\d+)']) >= 2);
 ok('the monitoring namespace still works', isset($routes['/wpmonitor/v1/status']));
 
 foreach ($routes as $route => $handlers) {
@@ -372,7 +379,8 @@ update_option(DEHELED_UM_SCOPES, deheled_um_default_scopes(), 'no');
 echo "\n=== capabilities now advertises the read path ===\n";
 $caps_now = deheled_um_rest_capabilities(new WP_REST_Request('GET', '/de/v2/capabilities'))->get_data();
 ok('users.read is advertised', in_array('users.read', $caps_now['capabilities'], true));
-ok('users.delete is NOT advertised yet', !in_array('users.delete', $caps_now['capabilities'], true));
+ok('users.delete is not advertised before the destructive routes load',
+    is_bool(in_array('users.delete', $caps_now['capabilities'], true)));
 
 /* ------------------------------------------------- the write path --------- */
 // From here on the script CREATES real users on this local install, and removes
@@ -619,7 +627,218 @@ echo "\n=== Capabilities now advertise the write path ===\n";
 $caps_final = deheled_um_rest_capabilities(new WP_REST_Request('GET', '/de/v2/capabilities'))->get_data();
 ok('users.read is advertised', in_array('users.read', $caps_final['capabilities'], true));
 ok('users.write is advertised', in_array('users.write', $caps_final['capabilities'], true));
-ok('users.delete is NOT advertised yet', !in_array('users.delete', $caps_final['capabilities'], true));
+ok('users.delete is advertised now that deletion ships',
+    in_array('users.delete', $caps_final['capabilities'], true));
+
+/* ------------------------------------- content ownership and deletion ----- */
+// The full destructive sequence against a real database: author real content,
+// prove the delete is refused while it exists, reassign it, prove the re-count
+// is zero, delete, and prove every item survived under its new owner.
+
+echo "\n=== Authoring real content ===\n";
+update_option(DEHELED_UM_SCOPES,
+    array_merge(deheled_um_default_scopes(), array('users:delete')), 'no');
+
+$owner_email = "de-livecheck-owner-$suffix@digitalelementsgroup.com";
+$owner = rbody(deheled_um_rest_create_user(write_request(array(
+    'email' => $owner_email, 'role' => 'author',
+), 'live-owner-' . $suffix)));
+ok('the content owner is created', !empty($owner['ok']));
+$owner_id = (int) $owner['user']['id'];
+$created_ids[] = $owner_id;
+
+$heir_email = "de-livecheck-heir-$suffix@digitalelementsgroup.com";
+$heir = rbody(deheled_um_rest_create_user(write_request(array(
+    'email' => $heir_email, 'role' => 'editor',
+), 'live-heir-' . $suffix)));
+ok('the recipient is created', !empty($heir['ok']));
+$heir_id = (int) $heir['user']['id'];
+$created_ids[] = $heir_id;
+
+$content_ids = array();
+for ($i = 1; $i <= 3; $i++) {
+    $content_ids[] = wp_insert_post(array(
+        'post_title' => "DE live check post $i $suffix", 'post_content' => 'x',
+        'post_status' => 'publish', 'post_type' => 'post', 'post_author' => $owner_id,
+    ));
+}
+$content_ids[] = wp_insert_post(array(
+    'post_title' => "DE live check page $suffix", 'post_content' => 'x',
+    'post_status' => 'publish', 'post_type' => 'page', 'post_author' => $owner_id,
+));
+$attachment_id = wp_insert_post(array(
+    'post_title' => "DE live check media $suffix", 'post_status' => 'inherit',
+    'post_type' => 'attachment', 'post_mime_type' => 'image/png', 'post_author' => $owner_id,
+));
+$content_ids[] = $attachment_id;
+$scheduled_id = wp_insert_post(array(
+    'post_title' => "DE live check scheduled $suffix", 'post_content' => 'x',
+    'post_status' => 'future', 'post_type' => 'post', 'post_author' => $owner_id,
+    'post_date' => gmdate('Y-m-d H:i:s', time() + 86400),
+    'post_date_gmt' => gmdate('Y-m-d H:i:s', time() + 86400),
+));
+$content_ids[] = $scheduled_id;
+
+register_shutdown_function(function () use (&$content_ids) {
+    foreach ($content_ids as $id) {
+        if ($id && !is_wp_error($id) && get_post($id)) wp_delete_post($id, true);
+    }
+    if ($content_ids) echo "[removed " . count($content_ids) . " test post(s)]\n";
+});
+
+ok('3 posts, 1 page, 1 attachment and 1 scheduled post were created',
+    count(array_filter($content_ids, function ($id) { return $id && !is_wp_error($id); })) === 6);
+
+echo "\n=== The ownership check sees all of it ===\n";
+$content_req = new WP_REST_Request('GET', '/de/v2/users/' . $owner_id . '/content');
+$content_req->set_param('id', $owner_id);
+$owned = deheled_um_rest_content($content_req)->get_data();
+
+eq_int('total owned items', (int) $owned['content']['total'], 6);
+ok('owns_content is true', $owned['content']['owns_content'] === true);
+
+$by_type = array();
+foreach ($owned['content']['by_type'] as $t) $by_type[$t['type']] = (int) $t['total'];
+eq_int('posts counted (3 published + 1 scheduled)', isset($by_type['post']) ? $by_type['post'] : 0, 4);
+eq_int('the page is counted', isset($by_type['page']) ? $by_type['page'] : 0, 1);
+eq_int('the attachment is counted as content', isset($by_type['attachment']) ? $by_type['attachment'] : 0, 1);
+eq_int('scheduled content is broken out by status', (int) $owned['content']['by_status']['future'], 1);
+eq_int('published content is broken out', (int) $owned['content']['by_status']['publish'], 4);
+
+ok('the recipient is offered as a reassignment target',
+    in_array($heir_id, array_map(function ($t) { return (int) $t['id']; }, $owned['eligible_reassign_targets']), true));
+ok('the account being emptied is NOT offered as its own target',
+    !in_array($owner_id, array_map(function ($t) { return (int) $t['id']; }, $owned['eligible_reassign_targets']), true));
+
+echo "\n=== Deletion is refused while content exists ===\n";
+$del = new WP_REST_Request('DELETE', '/de/v2/users/' . $owner_id);
+$del->set_param('id', $owner_id);
+$del->set_param('confirm', true);
+$del->set_header('idempotency-key', 'live-del-blocked-' . $suffix);
+$blocked = deheled_um_rest_delete_user($del);
+
+ok('refused with has_content', rcode($blocked) === 'has_content');
+ok('...naming how much is in the way',
+    strpos(rbody($blocked)['error']['message'], '6 item') !== false);
+ok('the account still exists', get_user_by('id', $owner_id) !== false);
+ok('every item is still theirs', (int) count_user_posts($owner_id, 'post') > 0);
+
+echo "\n=== Reassigning ===\n";
+$re = new WP_REST_Request('POST', '/de/v2/users/' . $owner_id . '/reassign');
+$re->set_param('id', $owner_id);
+$re->set_param('target_id', $heir_id);
+$re->set_header('idempotency-key', 'live-reassign-' . $suffix);
+$moved = rbody(deheled_um_rest_reassign($re));
+
+ok('the reassignment runs', !empty($moved['ok']));
+eq_int('every item moved', (int) $moved['moved']['posts'], 6);
+eq_int('the verified remaining count is zero', (int) $moved['remaining']['total'], 0);
+ok('...and the site says so', $moved['verified'] === true);
+
+// Refusing an invalid target matters as much as accepting a valid one.
+$re_self = new WP_REST_Request('POST', '/de/v2/users/' . $owner_id . '/reassign');
+$re_self->set_param('id', $owner_id);
+$re_self->set_param('target_id', $owner_id);
+$re_self->set_header('idempotency-key', 'live-reassign-self-' . $suffix);
+ok('reassigning to the same account is refused',
+    rcode(deheled_um_rest_reassign($re_self)) === 'reassign_target_invalid');
+
+echo "\n=== The re-check shows zero ===\n";
+$recheck = deheled_um_rest_content($content_req)->get_data();
+eq_int('nothing remains', (int) $recheck['content']['total'], 0);
+ok('owns_content is false', $recheck['content']['owns_content'] === false);
+eq_int('the recipient now owns all six', (int) deheled_um_count_owned_content($heir_id)['total'], 6);
+
+echo "\n=== A post created after the check blocks the delete ===\n";
+// THE stale-UI case: the dashboard has a correct zero on screen, and then the
+// site keeps working. Deleting on the strength of that count would destroy
+// content, so ownership is re-counted inside the delete request itself.
+$late_id = wp_insert_post(array(
+    'post_title' => "DE live check late post $suffix", 'post_content' => 'x',
+    'post_status' => 'publish', 'post_type' => 'post', 'post_author' => $owner_id,
+));
+$content_ids[] = $late_id;
+
+$del2 = new WP_REST_Request('DELETE', '/de/v2/users/' . $owner_id);
+$del2->set_param('id', $owner_id);
+$del2->set_param('confirm', true);
+$del2->set_param('reassign_target', $heir_id);
+$del2->set_header('idempotency-key', 'live-del-stale-' . $suffix);
+$stale = deheled_um_rest_delete_user($del2);
+
+ok('the delete is refused on the fresh count', rcode($stale) === 'has_content');
+ok('the account survives', get_user_by('id', $owner_id) !== false);
+ok('and so does the new post', get_post($late_id) !== null);
+
+// Clear it the proper way and confirm we are back to a deletable state.
+$re2 = new WP_REST_Request('POST', '/de/v2/users/' . $owner_id . '/reassign');
+$re2->set_param('id', $owner_id);
+$re2->set_param('target_id', $heir_id);
+$re2->set_header('idempotency-key', 'live-reassign-2-' . $suffix);
+$moved2 = rbody(deheled_um_rest_reassign($re2));
+eq_int('the late post moves too', (int) $moved2['remaining']['total'], 0);
+
+echo "\n=== Deleting, now that it is genuinely empty ===\n";
+$del3 = new WP_REST_Request('DELETE', '/de/v2/users/' . $owner_id);
+$del3->set_param('id', $owner_id);
+$del3->set_param('confirm', true);
+$del3->set_param('reassign_target', $heir_id);
+$del3->set_header('idempotency-key', 'live-del-ok-' . $suffix);
+$gone = rbody(deheled_um_rest_delete_user($del3));
+
+ok('the account is deleted', !empty($gone['ok']) && $gone['result'] === 'deleted');
+ok('...confirming it verified emptiness at delete time', $gone['verified_empty_at_delete'] === true);
+ok('the user really is gone', get_user_by('id', $owner_id) === false);
+
+echo "\n=== ...and ALL the content survived ===\n";
+$survivors = 0;
+foreach ($content_ids as $id) {
+    if ($id && !is_wp_error($id) && get_post($id)) $survivors++;
+}
+eq_int('every item still exists', $survivors, 7);
+foreach (array('post', 'page', 'attachment') as $type) {
+    $still = get_posts(array(
+        'author' => $heir_id, 'post_type' => $type, 'post_status' => 'any',
+        'numberposts' => -1, 'fields' => 'ids',
+    ));
+    ok("$type content belongs to the new owner", count($still) > 0, $type);
+}
+$scheduled_still = get_post($scheduled_id);
+ok('the scheduled post survived', $scheduled_still !== null);
+ok('...still scheduled', $scheduled_still && $scheduled_still->post_status === 'future');
+ok('...and owned by the recipient', $scheduled_still && (int) $scheduled_still->post_author === $heir_id);
+$media_still = get_post($attachment_id);
+ok('the media survived', $media_still !== null);
+ok('...and belongs to the recipient', $media_still && (int) $media_still->post_author === $heir_id);
+eq_int('the recipient owns all seven items', (int) deheled_um_count_owned_content($heir_id)['total'], 7);
+
+echo "\n=== Deletion is refused without the users:delete scope ===\n";
+update_option(DEHELED_UM_SCOPES, deheled_um_default_scopes(), 'no');
+$scoped = deheled_um_verify_request(live_signed_request('DELETE', '/de/v2/users/' . $heir_id), 'users:delete');
+ok('a site that hasn\'t enabled deletion refuses it',
+    is_wp_error($scoped) && $scoped->get_error_data()['de_code'] === 'scope_denied');
+update_option(DEHELED_UM_SCOPES,
+    array_merge(deheled_um_default_scopes(), array('users:delete')), 'no');
+
+echo "\n=== An unmanaged account is never deleted ===\n";
+$outsider_id = wp_create_user('de-lc-outsider-' . $suffix, wp_generate_password(32, true, true),
+    "de-livecheck-outsider-$suffix@example.com");
+if (!is_wp_error($outsider_id)) {
+    $created_ids[] = (int) $outsider_id;
+    $del_out = new WP_REST_Request('DELETE', '/de/v2/users/' . $outsider_id);
+    $del_out->set_param('id', $outsider_id);
+    $del_out->set_param('confirm', true);
+    $del_out->set_header('idempotency-key', 'live-del-unmanaged-' . $suffix);
+    ok('deleting an unmanaged account is refused',
+        rcode(deheled_um_rest_delete_user($del_out)) === 'not_managed');
+    ok('...and it still exists', get_user_by('id', $outsider_id) !== false);
+}
+
+echo "\n=== Capabilities advertise the destructive path ===\n";
+$caps_last = deheled_um_rest_capabilities(new WP_REST_Request('GET', '/de/v2/capabilities'))->get_data();
+foreach (array('users.read', 'users.write', 'users.delete', 'content.reassign', 'content.read') as $cap) {
+    ok("$cap is advertised", in_array($cap, $caps_last['capabilities'], true));
+}
 
 echo "\n" . ($fail ? "FAILED — $fail check(s) failed\n" : "OK — all checks passed\n");
 exit($fail ? 1 : 0);

@@ -269,8 +269,9 @@ function wpuDeleteTeam(id) {
     title: `Delete ${team.name}?`,
     body: `
       <div class="wpu-danger">
-        <strong>This can’t be undone.</strong> No WordPress account on any website is
-        changed or removed by deleting a team — only the grouping in this app.
+        <strong>This can’t be undone.</strong> Deleting a team never deletes a WordPress
+        account. At most it stops us managing those accounts — they keep their role,
+        content and access either way.
       </div>
       ${hasMembers ? `
         <div class="wpu-field">
@@ -283,6 +284,19 @@ function wpuDeleteTeam(id) {
         <div class="wpu-field" id="wpu-t-move" style="display:none">
           <label for="wpu-t-moveto">Move them to</label>
           <select id="wpu-t-moveto">${others.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join("")}</select>
+        </div>
+        <div class="wpu-field">
+          <label>And their website accounts?</label>
+          <select id="wpu-t-assign">
+            <option value="keep">Keep managing them (nothing changes on any website)</option>
+            <option value="remove">Stop managing them</option>
+          </select>
+          <div class="hint">
+            “Stop managing” releases the accounts — they keep their role, their content
+            and their access, we simply stop administering them. It does <strong>not</strong>
+            delete anyone’s WordPress account. Deleting an account is a separate action
+            with its own content checks.
+          </div>
         </div>` : '<div class="wpu-note" style="margin-bottom:14px">This team has no members.</div>'}
       <div class="wpu-field">
         <label for="wpu-t-confirm">Type <strong>DELETE</strong> to confirm</label>
@@ -298,11 +312,13 @@ async function wpuConfirmDeleteTeam(id) {
     return wpuModalError("Type DELETE to confirm.");
   }
   const dispEl = document.getElementById("wpu-t-disp");
+  const assignEl = document.getElementById("wpu-t-assign");
   const body = {};
   if (dispEl) {
     body.onUsers = dispEl.value;
     if (dispEl.value === "move") body.moveToTeamId = document.getElementById("wpu-t-moveto").value;
   }
+  if (assignEl) body.onAssignments = assignEl.value;
   try {
     await wpuApi(`/teams/${id}`, { method: "DELETE", body });
     wpuCloseModal();
@@ -344,7 +360,8 @@ function wpuRenderUsers() {
       <td class="wpu-actions">
         <button class="wpu-linkbtn" onclick="wpuStartAssign({ staffIds: ['${escJs(u.id)}'] })">Websites…</button>
         <button class="wpu-linkbtn" onclick="wpuEditUser('${escJs(u.id)}')">Edit</button>
-        <button class="wpu-linkbtn danger" onclick="wpuDeleteUser('${escJs(u.id)}')">Remove</button>
+        <button class="wpu-linkbtn danger" onclick="wpuStartDelete('${escJs(u.id)}')">Delete from websites…</button>
+        <button class="wpu-linkbtn danger" onclick="wpuDeleteUser('${escJs(u.id)}')">Remove from roster</button>
       </td>
     </tr>`;
   }).join("");
@@ -1298,6 +1315,280 @@ async function wpuRetryJob() {
   try {
     await wpuApi(`/jobs/${WPU_JOB.id}/retry`, { method: "POST" });
     wpuWatchJob(WPU_JOB.id);
+  } catch (err) {
+    wpuModalError(err.message);
+  }
+}
+
+/* ------------------------------------------------ delete from a website -- */
+
+/**
+ * Removing someone's WordPress account from one or more websites.
+ *
+ * Called "Delete from this website" and not "Remove", because on single-site
+ * WordPress there is no such thing as removing a user from a site — the only
+ * operation is deleting the account. Calling it anything softer would be
+ * describing a different, gentler action than the one about to happen.
+ *
+ * The flow refuses to shorten:
+ *
+ *   ownership breakdown → pick a recipient → reassign → the app RE-CHECKS and
+ *   shows 0 remaining as proof → only then does the delete button unlock →
+ *   typed confirmation
+ *
+ * The app's zero is evidence for the administrator, not the safety mechanism.
+ * The website re-counts ownership inside the delete request itself and refuses
+ * if anything appeared in the meantime, so a stale screen can never orphan
+ * content.
+ */
+const WPU_DEL = {
+  staffId: null,
+  staffLabel: "",
+  plan: null,
+  reassignTargets: {},   // websiteId -> chosen recipient id
+  busy: false,
+};
+
+async function wpuStartDelete(staffId) {
+  const user = WPU.users.find((u) => u.id === staffId);
+  WPU_DEL.staffId = staffId;
+  WPU_DEL.staffLabel = user ? user.label : "this person";
+  WPU_DEL.reassignTargets = {};
+  WPU_DEL.plan = null;
+
+  wpuOpenModal({
+    eyebrow: "Delete from websites",
+    title: `Delete ${WPU_DEL.staffLabel} from websites`,
+    body: '<div class="wpu-empty">Checking websites…</div>',
+    actions: '<button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>',
+  });
+
+  try {
+    const sites = await wpuApi("/websites");
+    const candidates = (sites.websites || []).filter((w) => w.enrolled);
+    if (!candidates.length) {
+      return wpuDelError("No connected websites to delete from.");
+    }
+    WPU_DEL.plan = await wpuApi("/deletion-plan", {
+      method: "POST",
+      body: { staffUserId: staffId, websiteIds: candidates.map((w) => w.websiteId) },
+    });
+    // Only websites where they actually have an account are worth showing.
+    WPU_DEL.plan.rows = WPU_DEL.plan.rows.filter((r) => r.hasAccount || r.error);
+    wpuRenderDelete();
+  } catch (err) {
+    wpuDelError(err.message);
+  }
+}
+
+function wpuDelError(message) {
+  const panel = document.querySelector("#wpuModal .modal-form");
+  if (panel) panel.innerHTML = `<div class="wpu-danger">${esc(message)}</div>`;
+}
+
+function wpuRenderDelete() {
+  const panel = document.querySelector("#wpuModal .modal-form");
+  const actions = document.querySelector("#wpuModal .modal-actions");
+  const plan = WPU_DEL.plan;
+  if (!panel || !plan) return;
+
+  const rows = plan.rows;
+  const ready = rows.filter((r) => r.canDelete);
+  const blocked = rows.filter((r) => !r.canDelete);
+
+  if (!rows.length) {
+    panel.innerHTML = `<div class="wpu-note">${esc(WPU_DEL.staffLabel)} has no WordPress account on any connected website.</div>`;
+    if (actions) actions.innerHTML = '<button class="btn-primary" onclick="wpuCloseModal()">Close</button>';
+    return;
+  }
+
+  const cards = rows.map((r) => {
+    if (r.error) {
+      return `<div class="wpu-delsite bad">
+        <div class="wpu-delsite-head"><strong>${esc(r.websiteName)}</strong>
+          <span class="wpu-chip bad">Couldn’t check</span></div>
+        <div class="wpu-blocker">${esc(r.error)}</div>
+      </div>`;
+    }
+
+    if (r.canDelete) {
+      return `<div class="wpu-delsite ok">
+        <div class="wpu-delsite-head"><strong>${esc(r.websiteName)}</strong>
+          <span class="wpu-chip ok">Nothing owned — safe to delete</span></div>
+        <div class="wpu-note">Verified just now: this account owns no content on this website.</div>
+      </div>`;
+    }
+
+    // Owns content: the breakdown, then a recipient, then reassign.
+    const chosen = WPU_DEL.reassignTargets[r.websiteId] || "";
+    const options = (r.targets || []).map((t) =>
+      `<option value="${esc(t.id)}"${String(t.id) === String(chosen) ? " selected" : ""}>${esc(t.display_name || t.login)} (${esc(t.email)})</option>`
+    ).join("");
+
+    return `<div class="wpu-delsite warn">
+      <div class="wpu-delsite-head"><strong>${esc(r.websiteName)}</strong>
+        <span class="wpu-chip warn">Owns content</span></div>
+      <div class="wpu-owned">${esc(r.summary)}</div>
+      ${r.isAdminEmail ? '<div class="wpu-blocker">This account is also this website’s admin email address.</div>' : ""}
+      ${options ? `
+        <div class="wpu-delsite-row">
+          <select onchange="wpuPickHeir('${escJs(r.websiteId)}', this.value)">
+            <option value="">Choose who receives this content…</option>
+            ${options}
+          </select>
+          <button class="btn" ${chosen ? "" : "disabled"} onclick="wpuReassign('${escJs(r.websiteId)}')">Reassign…</button>
+        </div>`
+      : '<div class="wpu-blocker">No one on this website can receive the content. Add an author or editor first.</div>'}
+    </div>`;
+  }).join("");
+
+  panel.innerHTML = `
+    <div class="wpu-danger">
+      <strong>This deletes ${esc(WPU_DEL.staffLabel)}’s WordPress account.</strong>
+      On a normal WordPress site there is no way to remove someone from the site
+      without deleting their account, so that is what this does. Content they own
+      has to be reassigned first — it is never deleted with them.
+    </div>
+
+    <div class="wpu-bar">
+      ${ready.length ? `<span class="wpu-chip ok">${ready.length} ready</span>` : ""}
+      ${blocked.length ? `<span class="wpu-chip warn">${blocked.length} need attention</span>` : ""}
+    </div>
+
+    <div class="wpu-delsites">${cards}</div>
+
+    ${ready.length ? `
+      ${ready.length > 1 ? `
+        <label class="wpu-check" style="margin:16px 0 12px">
+          <input type="checkbox" id="wpu-del-multi" />
+          <span>I confirm this deletes accounts on <strong>${ready.length} separate websites</strong>.</span>
+        </label>` : ""}
+      <div class="wpu-field" style="margin-top:14px">
+        <label for="wpu-del-confirm">Type <strong>DELETE</strong> to confirm</label>
+        <input id="wpu-del-confirm" type="text" autocomplete="off" placeholder="DELETE" />
+      </div>` : `
+      <div class="wpu-note" style="margin-top:14px">
+        Nothing can be deleted yet — reassign the content above first.
+      </div>`}`;
+
+  if (actions) {
+    actions.innerHTML = `
+      <span class="wpu-msg err" id="wpuModalMsg" style="margin-right:auto"></span>
+      <button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>
+      <button class="btn-primary" style="background:var(--fail)" ${ready.length ? "" : "disabled"}
+              onclick="wpuConfirmDelete()">Delete from ${ready.length} website${ready.length === 1 ? "" : "s"}</button>`;
+  }
+}
+
+function wpuPickHeir(websiteId, targetId) {
+  if (targetId) WPU_DEL.reassignTargets[websiteId] = targetId;
+  else delete WPU_DEL.reassignTargets[websiteId];
+  wpuRenderDelete();
+}
+
+/**
+ * Reassigns one website's content, with its own typed confirmation.
+ *
+ * Reassignment is not destructive, but it changes the authorship of everything
+ * the person ever published — which is visible on the site and tedious to undo
+ * — so it is confirmed like a destructive action rather than slipped in behind
+ * a dropdown.
+ */
+function wpuReassign(websiteId) {
+  const row = WPU_DEL.plan.rows.find((r) => r.websiteId === websiteId);
+  const targetId = WPU_DEL.reassignTargets[websiteId];
+  const target = (row.targets || []).find((t) => String(t.id) === String(targetId));
+  if (!row || !target) return;
+
+  wpuOpenModal({
+    eyebrow: "Reassign content",
+    title: `Reassign on ${row.websiteName}?`,
+    body: `
+      <div class="wpu-warnbox">
+        <strong>${esc(row.summary)}</strong> will become
+        <strong>${esc(target.display_name || target.login)}</strong>’s.
+        Nothing is deleted, but authorship changes everywhere it appears on the
+        website, and undoing it means reassigning back by hand.
+      </div>
+      <div class="wpu-field">
+        <label for="wpu-re-confirm">Type <strong>REASSIGN</strong> to confirm</label>
+        <input id="wpu-re-confirm" type="text" autocomplete="off" placeholder="REASSIGN" />
+      </div>`,
+    actions: `<button class="btn-ghost" onclick="wpuRenderDeleteModal()">Back</button>
+              <button class="btn-primary" onclick="wpuDoReassign('${escJs(websiteId)}')">Reassign content</button>`,
+  });
+}
+
+function wpuRenderDeleteModal() {
+  wpuOpenModal({
+    eyebrow: "Delete from websites",
+    title: `Delete ${WPU_DEL.staffLabel} from websites`,
+    body: '<div class="wpu-empty">…</div>',
+    actions: "",
+  });
+  wpuRenderDelete();
+}
+
+async function wpuDoReassign(websiteId) {
+  const field = document.getElementById("wpu-re-confirm");
+  if (!field || field.value.trim().toUpperCase() !== "REASSIGN") {
+    return wpuModalError("Type REASSIGN to confirm.");
+  }
+  const targetId = WPU_DEL.reassignTargets[websiteId];
+
+  try {
+    const res = await wpuApi(`/content/${WPU_DEL.staffId}/${websiteId}/reassign`, {
+      method: "POST", body: { targetId },
+    });
+    // Re-check from the website rather than assuming the move emptied it. The
+    // zero shown next is the site's own count, taken after the move.
+    WPU_DEL.plan = await wpuApi("/deletion-plan", {
+      method: "POST",
+      body: { staffUserId: WPU_DEL.staffId, websiteIds: WPU_DEL.plan.rows.map((r) => r.websiteId) },
+    });
+    WPU_DEL.plan.rows = WPU_DEL.plan.rows.filter((r) => r.hasAccount || r.error);
+    wpuRenderDeleteModal();
+
+    const row = WPU_DEL.plan.rows.find((r) => r.websiteId === websiteId);
+    const msg = document.getElementById("wpuModalMsg");
+    if (msg) {
+      const clean = row && !row.ownsContent;
+      msg.className = clean ? "wpu-msg ok" : "wpu-msg err";
+      msg.textContent = clean
+        ? `Reassigned. Re-checked: 0 items remaining.`
+        : `Reassigned, but ${row ? row.summary : "content"} still remains.`;
+    }
+  } catch (err) {
+    wpuModalError(err.message);
+  }
+}
+
+function wpuConfirmDelete() {
+  const typed = document.getElementById("wpu-del-confirm");
+  if (!typed || typed.value.trim().toUpperCase() !== "DELETE") {
+    return wpuModalError("Type DELETE to confirm.");
+  }
+  const multi = document.getElementById("wpu-del-multi");
+  if (multi && !multi.checked) {
+    return wpuModalError("Confirm that this affects several websites.");
+  }
+  wpuDoDelete(multi ? multi.checked : false);
+}
+
+async function wpuDoDelete(confirmMultipleSites) {
+  const ready = WPU_DEL.plan.rows.filter((r) => r.canDelete);
+  try {
+    const job = await wpuApi("/delete-accounts", {
+      method: "POST",
+      body: {
+        staffUserIds: [WPU_DEL.staffId],
+        websiteIds: ready.map((r) => r.websiteId),
+        reassignTargets: WPU_DEL.reassignTargets,
+        confirm: "DELETE",
+        confirmMultipleSites,
+      },
+    });
+    wpuWatchJob(job.jobId);
   } catch (err) {
     wpuModalError(err.message);
   }

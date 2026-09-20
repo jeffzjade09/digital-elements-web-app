@@ -115,3 +115,15 @@
 .wpu-progress { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
 .wpu-progress-bar { height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s ease; }
 .wpu-warn-line { font-size: 11.5px; color: var(--warn); margin-top: 5px; line-height: 1.45; }
+
+/* Delete-from-website flow */
+.wpu-delsites { display: flex; flex-direction: column; gap: 10px; max-height: 44vh; overflow: auto; }
+.wpu-delsite { border: 1px solid var(--line); border-radius: 11px; padding: 13px 15px; background: var(--panel-2); }
+.wpu-delsite.ok { border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.wpu-delsite.warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.wpu-delsite.bad { border-color: color-mix(in srgb, var(--fail) 45%, transparent); }
+.wpu-delsite-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; font-size: 13px; }
+/* The breakdown an administrator actually reads before agreeing to anything. */
+.wpu-owned { font-size: 13px; font-weight: 600; color: var(--warn); margin-bottom: 10px; }
+.wpu-delsite-row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.wpu-delsite-row select { flex: 1; min-width: 180px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 8px 10px; font-size: 12.5px; }

@@ -75,5 +75,6 @@ function deheled_um_capability_list() {
     if (function_exists('deheled_um_rest_create_user'))    $caps[] = 'users.write';
     if (function_exists('deheled_um_rest_delete_user'))    $caps[] = 'users.delete';
     if (function_exists('deheled_um_rest_reassign'))       $caps[] = 'content.reassign';
+    if (function_exists('deheled_um_rest_content'))        $caps[] = 'content.read';
     return $caps;
 }

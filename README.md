@@ -259,6 +259,11 @@ tests/usermgmt-write.test.php       every write guard: managed-only, the role
                                     no generated password reaches a response
 tests/usermgmt-sync.test.mjs        the idempotency key, retry-only-on-transient,
                                     and the bounded concurrency executor
+tests/usermgmt-content.test.php     ownership counting incl. custom post types,
+                                    reassignment validation, every deletion
+                                    refusal, and the stale-UI orphan case
+tests/usermgmt-deletion.test.mjs    the ownership summary, per-website
+                                    independence, team-delete disposition
 ```
 
 ### Live check against a real WordPress install
