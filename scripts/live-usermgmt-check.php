@@ -503,9 +503,17 @@ if (!is_wp_error($client_id)) {
     ok('a password reset on it is refused too',
         rcode(deheled_um_rest_password_reset($reset)) === 'not_managed');
 
-    echo "\n=== Linking is the only way in ===\n";
+    echo "\n=== Linking is the only way in, and needs its own confirmation ===\n";
+    $link_noconfirm = new WP_REST_Request('POST', '/de/v2/users/' . $client_id . '/link');
+    $link_noconfirm->set_param('id', $client_id);
+    $link_noconfirm->set_header('idempotency-key', 'live-link-noconfirm-' . $suffix);
+    ok('linking an account we did not create needs an explicit confirmation',
+        rcode(deheled_um_rest_link_user($link_noconfirm)) === 'link_requires_confirmation');
+    ok('...and it stays unmanaged', deheled_um_user_is_managed($client_id) === false);
+
     $link = new WP_REST_Request('POST', '/de/v2/users/' . $client_id . '/link');
     $link->set_param('id', $client_id);
+    $link->set_param('confirm_link', true);
     $link->set_header('idempotency-key', 'live-link-' . $suffix);
     $linked = rbody(deheled_um_rest_link_user($link));
 
@@ -524,6 +532,32 @@ if (!is_wp_error($client_id)) {
     $attempt2->set_header('idempotency-key', 'live-after-link-' . $suffix);
     ok('now the change is allowed', rbody(deheled_um_rest_update_user($attempt2))['result'] === 'updated');
 
+    echo "\n=== A linked account can never be taken over ===\n";
+    // Linking a client's Editor, changing its address and requesting a reset
+    // would be a complete takeover using only the default write scope.
+    $steal = new WP_REST_Request('PATCH', '/de/v2/users/' . $client_id);
+    $steal->set_param('id', $client_id);
+    $steal->set_param('email', "de-livecheck-stolen-$suffix@example.com");
+    $steal->set_header('idempotency-key', 'live-steal-' . $suffix);
+    ok('its email address cannot be changed',
+        rcode(deheled_um_rest_update_user($steal)) === 'linked_account_protected');
+    ok('...and the address really is unchanged',
+        get_user_by('id', $client_id)->user_email === $client_email);
+
+    $steal_reset = new WP_REST_Request('POST', '/de/v2/users/' . $client_id . '/password-reset');
+    $steal_reset->set_param('id', $client_id);
+    $steal_reset->set_header('idempotency-key', 'live-steal-reset-' . $suffix);
+    ok('a password reset on it is refused',
+        rcode(deheled_um_rest_password_reset($steal_reset)) === 'linked_account_protected');
+
+    // The role is what we were permitted to manage, and that still works.
+    $rerole = new WP_REST_Request('PATCH', '/de/v2/users/' . $client_id);
+    $rerole->set_param('id', $client_id);
+    $rerole->set_param('role', 'author');
+    $rerole->set_header('idempotency-key', 'live-rerole-' . $suffix);
+    ok('but its role can still be managed',
+        rbody(deheled_um_rest_update_user($rerole))['result'] === 'updated');
+
     $unlink = new WP_REST_Request('POST', '/de/v2/users/' . $client_id . '/unlink');
     $unlink->set_param('id', $client_id);
     $unlink->set_header('idempotency-key', 'live-unlink-' . $suffix);
@@ -531,6 +565,37 @@ if (!is_wp_error($client_id)) {
     ok('...leaving the account in place', get_user_by('id', $client_id) !== false);
     ok('...no longer managed', deheled_um_user_is_managed($client_id) === false);
 }
+
+echo "\n=== An account we created stays fully manageable ===\n";
+ok('it is marked as created by us', deheled_um_user_was_created_by_us($new_user->ID));
+$own_email = new WP_REST_Request('PATCH', '/de/v2/users/' . $new_user->ID);
+$own_email->set_param('id', $new_user->ID);
+$own_email->set_param('email', "de-livecheck-renamed-$suffix@digitalelementsgroup.com");
+$own_email->set_header('idempotency-key', 'live-own-email-' . $suffix);
+ok('its email can be changed',
+    rbody(deheled_um_rest_update_user($own_email))['result'] === 'updated');
+$own_reset = new WP_REST_Request('POST', '/de/v2/users/' . $new_user->ID . '/password-reset');
+$own_reset->set_param('id', $new_user->ID);
+$own_reset->set_header('idempotency-key', 'live-own-reset-' . $suffix);
+ok('and a password reset is allowed',
+    rbody(deheled_um_rest_password_reset($own_reset))['result'] === 'reset');
+
+echo "\n=== Code-execution capabilities count as administering the site ===\n";
+// install_plugins alone is arbitrary code execution. Verified against the real
+// role map: whatever this install's Administrator holds must classify.
+$editable_now = deheled_um_editable_roles();
+ok('administrator classifies as site administration',
+    deheled_um_role_is_site_admin($editable_now['administrator']['capabilities']));
+ok('a role with only install_plugins classifies too',
+    deheled_um_role_is_site_admin(array('install_plugins' => true, 'edit_posts' => true)));
+ok('...and one with only edit_plugins',
+    deheled_um_role_is_site_admin(array('edit_plugins' => true)));
+ok('...and one with only switch_themes',
+    deheled_um_role_is_site_admin(array('switch_themes' => true)));
+ok('an ordinary editor still does not',
+    isset($editable_now['editor'])
+        ? deheled_um_role_is_site_admin($editable_now['editor']['capabilities']) === false
+        : true);
 
 echo "\n=== Role guards against the real role map ===\n";
 $bad_role = new WP_REST_Request('PATCH', '/de/v2/users/' . $new_user->ID);
@@ -723,6 +788,29 @@ ok('...naming how much is in the way',
 ok('the account still exists', get_user_by('id', $owner_id) !== false);
 ok('every item is still theirs', (int) count_user_posts($owner_id, 'post') > 0);
 
+echo "\n=== A client's own content is never reassigned ===\n";
+// Reassignment rewrites authorship and overwrites comment author details in
+// place, so it cannot be undone by running it backwards.
+$outsider_owner = wp_create_user('de-lc-outown-' . $suffix,
+    wp_generate_password(32, true, true), "de-livecheck-outown-$suffix@example.com");
+if (!is_wp_error($outsider_owner)) {
+    $created_ids[] = (int) $outsider_owner;
+    $their_post = wp_insert_post(array(
+        'post_title' => "DE live check client post $suffix", 'post_content' => 'x',
+        'post_status' => 'publish', 'post_type' => 'post', 'post_author' => (int) $outsider_owner,
+    ));
+    $content_ids[] = $their_post;
+
+    $steal_content = new WP_REST_Request('POST', '/de/v2/users/' . $outsider_owner . '/reassign');
+    $steal_content->set_param('id', $outsider_owner);
+    $steal_content->set_param('target_id', $heir_id);
+    $steal_content->set_header('idempotency-key', 'live-steal-content-' . $suffix);
+    ok('reassigning an unmanaged account is refused',
+        rcode(deheled_um_rest_reassign($steal_content)) === 'not_managed');
+    ok('...and their post is still theirs',
+        (int) get_post($their_post)->post_author === (int) $outsider_owner);
+}
+
 echo "\n=== Reassigning ===\n";
 $re = new WP_REST_Request('POST', '/de/v2/users/' . $owner_id . '/reassign');
 $re->set_param('id', $owner_id);
@@ -795,7 +883,12 @@ $survivors = 0;
 foreach ($content_ids as $id) {
     if ($id && !is_wp_error($id) && get_post($id)) $survivors++;
 }
-eq_int('every item still exists', $survivors, 7);
+// Counted against what was actually created, not a literal, so adding a case
+// above can't silently weaken this into "some of it survived".
+$expected_survivors = count(array_filter($content_ids, function ($id) {
+    return $id && !is_wp_error($id);
+}));
+eq_int('every item created by this run still exists', $survivors, $expected_survivors);
 foreach (array('post', 'page', 'attachment') as $type) {
     $still = get_posts(array(
         'author' => $heir_id, 'post_type' => $type, 'post_status' => 'any',
@@ -810,7 +903,10 @@ ok('...and owned by the recipient', $scheduled_still && (int) $scheduled_still->
 $media_still = get_post($attachment_id);
 ok('the media survived', $media_still !== null);
 ok('...and belongs to the recipient', $media_still && (int) $media_still->post_author === $heir_id);
-eq_int('the recipient owns all seven items', (int) deheled_um_count_owned_content($heir_id)['total'], 7);
+// The client's own post stays with the client; everything the deleted account
+// owned is now the recipient's.
+eq_int('the recipient owns everything the deleted account had',
+    (int) deheled_um_count_owned_content($heir_id)['total'], 7);
 
 echo "\n=== Deletion is refused without the users:delete scope ===\n";
 update_option(DEHELED_UM_SCOPES, deheled_um_default_scopes(), 'no');

@@ -17,7 +17,8 @@ const WPU = {
   roles: [],
   loaded: false,
   websites: [],
-  filters: { q: "", team: "", role: "", status: "" },
+  assignments: [],
+  filters: { q: "", team: "", role: "", status: "", website: "", sync: "" },
   selected: new Set(),
 };
 
@@ -25,6 +26,7 @@ const WPU_TABS = [
   { id: "teams", label: "Teams" },
   { id: "users", label: "Users" },
   { id: "websites", label: "Websites" },
+  { id: "sync", label: "Sync status" },
   { id: "audit", label: "Activity log" },
 ];
 
@@ -155,8 +157,21 @@ async function renderWpUsers() {
       WPU.users = users.users;
       WPU.roles = roles.roles;
       WPU.loaded = true;
+      // Website names are needed by the Users and Activity filters. Loaded
+      // without re-probing every site, and a failure here must not stop the
+      // rest of the screen working.
+      try {
+        const sites = await wpuApi("/websites");
+        WPU.websites = sites.websites || [];
+      } catch (e) { WPU.websites = []; }
+      try {
+        const assigned = await wpuApi("/assignments");
+        WPU.assignments = assigned.assignments || [];
+      } catch (e) { WPU.assignments = []; }
     } catch (err) {
-      root.innerHTML = `<div class="wpu-empty"><h4>Couldn’t load user management</h4><div class="wpu-note">${esc(err.message)}</div></div>`;
+      root.innerHTML = `<div class="wpu-empty"><h4>Couldn’t load user management</h4>
+        <div class="wpu-note">${esc(err.message)}</div>
+        <div style="margin-top:14px"><button class="btn" onclick="WPU.loaded=false; renderWpUsers()">Try again</button></div></div>`;
       return;
     }
   }
@@ -178,6 +193,7 @@ function wpuRenderPanel() {
   if (WPU.tab === "teams") return wpuRenderTeams();
   if (WPU.tab === "users") return wpuRenderUsers();
   if (WPU.tab === "websites") return wpuRenderWebsites();
+  if (WPU.tab === "sync") return wpuRenderSync();
   if (WPU.tab === "audit") return wpuRenderAudit();
 }
 
@@ -328,6 +344,11 @@ async function wpuConfirmDeleteTeam(id) {
 
 /* -------------------------------------------------------------------- users */
 
+// Every person's website assignments, keyed for the filters and the row detail.
+function wpuAssignmentsFor(staffUserId) {
+  return (WPU.assignments || []).filter((a) => a.staffUserId === staffUserId);
+}
+
 function wpuFilteredUsers() {
   const f = WPU.filters;
   const q = f.q.trim().toLowerCase();
@@ -336,8 +357,20 @@ function wpuFilteredUsers() {
     if (f.role && u.effectiveWpRole !== f.role) return false;
     if (f.status && u.status !== f.status) return false;
     if (q && !(u.email.toLowerCase().includes(q) || u.label.toLowerCase().includes(q))) return false;
+
+    const mine = wpuAssignmentsFor(u.id);
+    if (f.website && !mine.some((a) => a.websiteId === f.website)) return false;
+    if (f.sync) {
+      if (f.sync === "none") { if (mine.length) return false; }
+      else if (!mine.some((a) => a.state === f.sync)) return false;
+    }
     return true;
   });
+}
+
+function wpuClearFilters() {
+  WPU.filters = { q: "", team: "", role: "", status: "", website: "", sync: "" };
+  wpuRenderUsers();
 }
 
 function wpuRenderUsers() {
@@ -353,6 +386,14 @@ function wpuRenderUsers() {
       <td data-label="Person"><span class="wpu-name">${esc(u.label)}</span><span class="wpu-sub">${esc(u.email)}</span></td>
       <td data-label="Team">${u.teamId ? `<span class="wpu-chip team">${esc(u.teamName)}</span>` : '<span class="wpu-chip none">No team</span>'}</td>
       <td data-label="Role">${wpuRoleChip(u.effectiveWpRole, inherited)}</td>
+      <td data-label="Websites">${(() => {
+        const mine = wpuAssignmentsFor(u.id);
+        if (!mine.length) return '<span class="wpu-chip none">none</span>';
+        const failed = mine.filter((a) => a.state === "failed").length;
+        const ok = mine.filter((a) => ["synced", "updated", "linked"].includes(a.state)).length;
+        return `<span class="wpu-chip ${ok ? "ok" : "none"}">${ok}/${mine.length} synced</span>` +
+               (failed ? ` <span class="wpu-chip bad">${failed} failed</span>` : "");
+      })()}</td>
       <td data-label="Status">
         ${u.status === "disabled" ? '<span class="wpu-chip disabled">Disabled</span>' : '<span class="wpu-chip">Active</span>'}
         ${u.domainOverride ? ' <span class="wpu-chip ext" title="Outside the agency domain">External</span>' : ""}
@@ -361,7 +402,7 @@ function wpuRenderUsers() {
         <button class="wpu-linkbtn" onclick="wpuStartAssign({ staffIds: ['${escJs(u.id)}'] })">Websites…</button>
         <button class="wpu-linkbtn" onclick="wpuEditUser('${escJs(u.id)}')">Edit</button>
         <button class="wpu-linkbtn danger" onclick="wpuStartDelete('${escJs(u.id)}')">Delete from websites…</button>
-        <button class="wpu-linkbtn danger" onclick="wpuDeleteUser('${escJs(u.id)}')">Remove from roster</button>
+        <button class="wpu-linkbtn" onclick="wpuDeleteUser('${escJs(u.id)}')">Take off roster</button>
       </td>
     </tr>`;
   }).join("");
@@ -383,6 +424,19 @@ function wpuRenderUsers() {
         <option value="active"${f.status === "active" ? " selected" : ""}>Active</option>
         <option value="disabled"${f.status === "disabled" ? " selected" : ""}>Disabled</option>
       </select>
+      <select onchange="wpuSetFilter('website', this.value)">
+        <option value=""${!f.website ? " selected" : ""}>All websites</option>
+        ${(WPU.websites || []).map((w) => `<option value="${esc(w.websiteId)}"${f.website === w.websiteId ? " selected" : ""}>${esc(w.name)}</option>`).join("")}
+      </select>
+      <select onchange="wpuSetFilter('sync', this.value)">
+        <option value=""${!f.sync ? " selected" : ""}>Any sync status</option>
+        <option value="synced"${f.sync === "synced" ? " selected" : ""}>Synced</option>
+        <option value="updated"${f.sync === "updated" ? " selected" : ""}>Updated</option>
+        <option value="failed"${f.sync === "failed" ? " selected" : ""}>Failed</option>
+        <option value="pending"${f.sync === "pending" ? " selected" : ""}>Pending</option>
+        <option value="none"${f.sync === "none" ? " selected" : ""}>No websites yet</option>
+      </select>
+      ${Object.values(f).some(Boolean) ? '<button class="wpu-linkbtn" onclick="wpuClearFilters()">Clear</button>' : ""}
       <button class="btn primary" onclick="wpuEditUser()">${ICON.plus} Add person</button>
     </div>
 
@@ -399,7 +453,7 @@ function wpuRenderUsers() {
       ${list.length ? `<table class="wpu-table">
         <thead><tr>
           <th style="width:34px"><input type="checkbox" onchange="wpuToggleSelectAll(this.checked)" aria-label="Select all" /></th>
-          <th>Person</th><th>Team</th><th>Role</th><th>Status</th><th></th>
+          <th>Person</th><th>Team</th><th>Role</th><th>Websites</th><th>Status</th><th></th>
         </tr></thead>
         <tbody>${rows}</tbody></table>`
       : `<div class="wpu-empty"><h4>${WPU.users.length ? "No one matches those filters" : "No staff on the roster yet"}</h4>
@@ -525,7 +579,7 @@ function wpuDeleteUser(id) {
   if (!user) return;
   wpuOpenModal({
     eyebrow: "Staff",
-    title: `Remove ${user.label}?`,
+    title: `Take ${user.label} off the roster?`,
     body: `
       <div class="wpu-danger">
         <strong>This removes them from the roster only.</strong> Any WordPress account
@@ -537,7 +591,7 @@ function wpuDeleteUser(id) {
         <input id="wpu-u-confirm" type="text" autocomplete="off" placeholder="DELETE" />
       </div>`,
     actions: `<button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>
-              <button class="btn-primary" style="background:var(--fail)" onclick="wpuConfirmDeleteUser('${escJs(id)}')">Remove from roster</button>`,
+              <button class="btn-primary" style="background:var(--fail)" onclick="wpuConfirmDeleteUser('${escJs(id)}')">Take off roster</button>`,
   });
 }
 
@@ -1187,7 +1241,7 @@ const WPU_OP_STATE = {
   linked:      { label: "Linked",     cls: "ok" },
   updated:     { label: "Updated",    cls: "ok" },
   skipped:     { label: "No change",  cls: "none" },
-  removed:     { label: "Removed",    cls: "ok" },
+  removed:     { label: "No longer managed", cls: "ok" },
   failed:      { label: "Failed",     cls: "bad" },
   interrupted: { label: "Interrupted", cls: "warn" },
 };
@@ -1594,34 +1648,260 @@ async function wpuDoDelete(confirmMultipleSites) {
   }
 }
 
-/* -------------------------------------------------------------------- audit */
 
+/* --------------------------------------------------------- sync status --- */
+
+/**
+ * Where every connected website stands, in one place.
+ *
+ * Exists because the questions an administrator actually asks during a rollout
+ * — which sites still need the plugin update, which were never connected, which
+ * can't be reached, and did anything get stranded by a restart — are otherwise
+ * answered by opening each site's row one at a time.
+ */
+async function wpuRenderSync(force) {
+  const panel = document.getElementById("wpuPanel");
+  panel.innerHTML = `<div class="wpu-card"><div class="wpu-empty">${force ? "Re-checking every website…" : "Loading…"}</div></div>`;
+
+  let data;
+  try {
+    data = await wpuApi("/sync-status" + (force ? "?refresh=1" : ""));
+  } catch (err) {
+    panel.innerHTML = `<div class="wpu-card"><div class="wpu-empty"><h4>Couldn’t load sync status</h4><div class="wpu-note">${esc(err.message)}</div></div></div>`;
+    return;
+  }
+
+  if (!data.configured) {
+    panel.innerHTML = `<div class="wpu-card"><div class="wpu-empty">
+      <h4>User management isn’t configured on this server</h4>
+      <div class="wpu-note">Set <code>USER_MGMT_ENC_KEY</code> and restart. See <code>docs/user-management.md</code>.</div>
+    </div></div>`;
+    return;
+  }
+
+  const s = data.summary;
+  const needUpdate = data.sites.filter((x) => x.needsPluginUpdate);
+  const needEnroll = data.sites.filter((x) => x.needsEnrollment);
+  const unreachable = data.sites.filter((x) => x.readiness === "unreachable");
+
+  const siteRows = data.sites.map((x) => {
+    const state = WPU_READINESS[x.readiness] || WPU_READINESS.unknown;
+    const counts = Object.entries(x.assignments || {})
+      .filter(([, n]) => n > 0)
+      .map(([k, n]) => `<span class="wpu-chip ${k === "failed" ? "bad" : k === "synced" || k === "updated" ? "ok" : "none"}">${n} ${esc(k)}</span>`)
+      .join(" ");
+
+    return `
+      <tr>
+        <td data-label="Website"><span class="wpu-name">${esc(x.name)}</span><span class="wpu-sub">${esc(x.url)}</span></td>
+        <td data-label="Status"><span class="wpu-chip ${esc(state.cls)}" title="${esc(x.message || "")}">${esc(state.label)}</span></td>
+        <td data-label="Plugin">${x.pluginVersion
+          ? `<span class="wpu-chip role${x.needsPluginUpdate ? " admin-like" : ""}">${esc(x.pluginVersion)}</span>`
+          : '<span class="wpu-chip none">unknown</span>'}
+          ${x.needsPluginUpdate ? `<div class="wpu-note">needs contract v${x.requiredApiVersion}</div>` : ""}</td>
+        <td data-label="Can do">${(x.capabilities || []).length
+          ? x.capabilities.map((c) => `<span class="wpu-chip role">${esc(c)}</span>`).join(" ")
+          : '<span class="wpu-chip none">—</span>'}</td>
+        <td data-label="Site allows">${(x.scopes || []).length
+          ? x.scopes.map((c) => `<span class="wpu-chip role">${esc(c)}</span>`).join(" ")
+          : '<span class="wpu-chip none">—</span>'}</td>
+        <td data-label="Accounts">${counts || '<span class="wpu-chip none">none</span>'}</td>
+        <td data-label="Checked" class="wpu-audit-when">${esc(x.checkedAt ? wpuWhen(x.checkedAt) : "—")}</td>
+      </tr>`;
+  }).join("");
+
+  const jobRows = data.jobs.map((j) => {
+    const cls = j.status === "done" ? "ok" : j.status === "partial" || j.status === "interrupted" ? "warn" : j.status === "failed" ? "bad" : "none";
+    const totals = j.totals ? Object.entries(j.totals).map(([k, n]) => `${n} ${k}`).join(", ") : "";
+    return `
+      <tr>
+        <td data-label="When" class="wpu-audit-when">${esc(wpuWhen(j.createdAt))}</td>
+        <td data-label="What"><span class="wpu-audit-act">${esc(j.kind)}</span></td>
+        <td data-label="Who">${esc(j.initiatedEmail || "—")}</td>
+        <td data-label="Result"><span class="wpu-chip ${cls}">${esc(j.status)}</span> ${esc(totals)}</td>
+        <td class="wpu-actions"><button class="wpu-linkbtn" onclick="wpuWatchJob('${escJs(j.id)}')">View</button></td>
+      </tr>`;
+  }).join("");
+
+  panel.innerHTML = `
+    <div class="wpu-bar">
+      <div class="grow">
+        <span class="wpu-chip ok">${s.ready} ready</span>
+        ${s.needsUpdate ? `<span class="wpu-chip warn">${s.needsUpdate} need the plugin update</span>` : ""}
+        ${s.needsEnrollment ? `<span class="wpu-chip warn">${s.needsEnrollment} not connected</span>` : ""}
+        ${s.unreachable ? `<span class="wpu-chip bad">${s.unreachable} unreachable</span>` : ""}
+      </div>
+      <button class="btn" onclick="wpuRenderSync(true)">Re-check all</button>
+    </div>
+
+    ${data.interrupted ? `<div class="wpu-warnbox">
+      <strong>${data.interrupted} operation${data.interrupted === 1 ? "" : "s"} were interrupted by a server restart.</strong>
+      They are safe to retry — each one replays rather than repeating, so nothing is applied twice.
+      Open the job below and press Retry failed.
+    </div>` : ""}
+
+    ${needUpdate.length ? `<div class="wpu-warnbox">
+      <strong>${needUpdate.length} website${needUpdate.length === 1 ? "" : "s"} still need the helper plugin update.</strong>
+      <div style="margin-top:6px">${needUpdate.map((x) => `${esc(x.name)} (has ${esc(x.pluginVersion || "an older version")})`).join("<br />")}</div>
+      <div style="margin-top:8px">Sites with automatic updates on will pick it up within a few hours.
+      The rest need someone to press Update on that site’s Plugins screen. Nothing else can be done from here.</div>
+    </div>` : ""}
+
+    ${needEnroll.length ? `<div class="wpu-note" style="margin-bottom:14px">
+      ${needEnroll.length} website${needEnroll.length === 1 ? " has" : "s have"} the right plugin but aren’t connected yet —
+      generate a code on the Websites tab. Connecting always takes someone with access to that site’s admin;
+      it can’t be switched on from here.
+    </div>` : ""}
+
+    ${unreachable.length ? `<div class="wpu-note" style="margin-bottom:14px">
+      ${unreachable.length} website${unreachable.length === 1 ? "" : "s"} couldn’t be reached just now. That’s different from
+      being out of date — it may simply be down or blocking us.
+    </div>` : ""}
+
+    <div class="wpu-roles-head">Websites</div>
+    <div class="wpu-card" style="margin-bottom:22px">
+      <table class="wpu-table">
+        <thead><tr><th>Website</th><th>Status</th><th>Plugin</th><th>Can do</th><th>Site allows</th><th>Accounts</th><th>Checked</th></tr></thead>
+        <tbody>${siteRows || '<tr><td colspan="7"><div class="wpu-empty"><h4>No websites yet</h4></div></td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="wpu-roles-head">Recent runs</div>
+    <div class="wpu-card">
+      ${data.jobs.length ? `<table class="wpu-table">
+        <thead><tr><th>When</th><th>What</th><th>Who</th><th>Result</th><th></th></tr></thead>
+        <tbody>${jobRows}</tbody></table>`
+      : '<div class="wpu-empty"><h4>Nothing has run yet</h4><div class="wpu-note">Assignments and deletions appear here.</div></div>'}
+    </div>
+
+    <div class="wpu-note" style="margin-top:12px">
+      “Can do” is what that website’s plugin supports. “Site allows” is what its own administrator
+      has permitted — deleting users and granting Administrator stay off unless they turn them on,
+      and this dashboard can’t change that.
+    </div>`;
+}
+
+/* -------------------------------------------------------- activity log --- */
+
+const WPU_AUDIT = { filters: { entityType: "", website: "", actor: "", action: "" }, facets: null, entries: [], expanded: new Set() };
+
+/**
+ * Every administrative change, filterable.
+ *
+ * before/after are rendered from the redacted copies the server sends. They are
+ * redacted on write as well, so this is the second pass — an entry written by
+ * an earlier version, or by a future caller that forgets, still cannot render a
+ * secret, a signature or an idempotency key in a browser.
+ */
 async function wpuRenderAudit() {
   const panel = document.getElementById("wpuPanel");
   panel.innerHTML = '<div class="wpu-card"><div class="wpu-empty">Loading…</div></div>';
-  let entries;
+
+  const f = WPU_AUDIT.filters;
+  const params = new URLSearchParams();
+  if (f.entityType) params.set("entityType", f.entityType);
+  if (f.website) params.set("website", f.website);
+  if (f.actor) params.set("actor", f.actor);
+  if (f.action) params.set("action", f.action);
+  params.set("limit", "200");
+
+  let data;
   try {
-    entries = (await wpuApi("/audit?limit=200")).entries;
+    data = await wpuApi("/audit?" + params.toString());
   } catch (err) {
     panel.innerHTML = `<div class="wpu-card"><div class="wpu-empty"><h4>Couldn’t load the activity log</h4><div class="wpu-note">${esc(err.message)}</div></div></div>`;
     return;
   }
 
-  const rows = entries.map((e) => `
-    <tr>
-      <td data-label="When" class="wpu-audit-when">${esc(wpuWhen(e.at))}</td>
-      <td data-label="Action"><span class="wpu-audit-act">${esc(e.action)}</span></td>
-      <td data-label="Who">${esc(e.actorEmail || "—")}</td>
-      <td data-label="Target">${esc(e.targetEmail || (e.after && e.after.name) || e.entityId || "—")}</td>
-      <td data-label="Result">${esc(e.result || "ok")}</td>
-    </tr>`).join("");
+  WPU_AUDIT.entries = data.entries;
+  WPU_AUDIT.facets = data.facets || { actions: [], actors: [], entityTypes: [] };
+  wpuDrawAudit();
+}
+
+function wpuDrawAudit() {
+  const panel = document.getElementById("wpuPanel");
+  const f = WPU_AUDIT.filters;
+  const facets = WPU_AUDIT.facets;
+  const entries = WPU_AUDIT.entries;
+
+  const siteName = (id) => {
+    const w = (WPU.websites || []).find((x) => x.websiteId === id);
+    return w ? w.name : id ? id.slice(0, 8) : null;
+  };
+
+  const rows = entries.map((e) => {
+    const open = WPU_AUDIT.expanded.has(e.id);
+    const changed = e.before || e.after;
+    const resultCls = e.result === "ok" ? "ok" : e.result === "failed" ? "bad" : e.result === "refused" ? "warn" : "none";
+    return `
+      <tr class="${changed ? "wpu-audit-row" : ""}" ${changed ? `onclick="wpuToggleAudit('${escJs(e.id)}')"` : ""}>
+        <td data-label="When" class="wpu-audit-when">${esc(wpuWhen(e.at))}</td>
+        <td data-label="Action"><span class="wpu-audit-act">${esc(e.action)}</span>
+          ${changed ? `<span class="wpu-chip none">${open ? "hide" : "details"}</span>` : ""}</td>
+        <td data-label="Who">${esc(e.actorEmail || "—")}</td>
+        <td data-label="Target">${esc(e.targetEmail || e.entityId || "—")}</td>
+        <td data-label="Website">${e.websiteId ? esc(siteName(e.websiteId)) : '<span class="wpu-chip none">—</span>'}</td>
+        <td data-label="Result"><span class="wpu-chip ${resultCls}">${esc(e.result || "ok")}</span></td>
+      </tr>
+      ${open ? `<tr class="wpu-audit-detail"><td colspan="6">
+        <div class="wpu-diff">
+          <div><div class="wpu-diff-head">Before</div><pre>${esc(wpuJson(e.before))}</pre></div>
+          <div><div class="wpu-diff-head">After</div><pre>${esc(wpuJson(e.after))}</pre></div>
+        </div>
+      </td></tr>` : ""}`;
+  }).join("");
 
   panel.innerHTML = `
-    <div class="wpu-bar"><div class="grow wpu-note">Every change made here is recorded: who did it, what changed, and when. Secrets and passwords are never stored in this log.</div></div>
+    <div class="wpu-bar">
+      <select onchange="wpuAuditFilter('action', this.value)">
+        <option value=""${!f.action ? " selected" : ""}>All actions</option>
+        ${(facets.actions || []).map((a) => `<option value="${esc(a)}"${f.action === a ? " selected" : ""}>${esc(a)}</option>`).join("")}
+      </select>
+      <select onchange="wpuAuditFilter('entityType', this.value)">
+        <option value=""${!f.entityType ? " selected" : ""}>Anything</option>
+        ${(facets.entityTypes || []).map((t) => `<option value="${esc(t)}"${f.entityType === t ? " selected" : ""}>${esc(t)}</option>`).join("")}
+      </select>
+      <select onchange="wpuAuditFilter('actor', this.value)">
+        <option value=""${!f.actor ? " selected" : ""}>Anyone</option>
+        ${(facets.actors || []).map((a) => `<option value="${esc(a)}"${f.actor === a ? " selected" : ""}>${esc(a)}</option>`).join("")}
+      </select>
+      <select onchange="wpuAuditFilter('website', this.value)">
+        <option value=""${!f.website ? " selected" : ""}>All websites</option>
+        ${(WPU.websites || []).map((w) => `<option value="${esc(w.websiteId)}"${f.website === w.websiteId ? " selected" : ""}>${esc(w.name)}</option>`).join("")}
+      </select>
+      ${Object.values(f).some(Boolean) ? '<button class="wpu-linkbtn" onclick="wpuAuditClear()">Clear filters</button>' : ""}
+    </div>
+
     <div class="wpu-card">
       ${entries.length ? `<table class="wpu-table">
-        <thead><tr><th>When</th><th>Action</th><th>Who</th><th>Target</th><th>Result</th></tr></thead>
+        <thead><tr><th>When</th><th>Action</th><th>Who</th><th>Target</th><th>Website</th><th>Result</th></tr></thead>
         <tbody>${rows}</tbody></table>`
-      : '<div class="wpu-empty"><h4>Nothing recorded yet</h4><div class="wpu-note">Actions appear here as soon as you make them.</div></div>'}
+      : `<div class="wpu-empty"><h4>${Object.values(f).some(Boolean) ? "Nothing matches those filters" : "Nothing recorded yet"}</h4>
+         <div class="wpu-note">${Object.values(f).some(Boolean) ? "Try clearing them." : "Actions appear here as soon as you make them."}</div></div>`}
+    </div>
+
+    <div class="wpu-note" style="margin-top:12px">
+      Showing ${entries.length} entr${entries.length === 1 ? "y" : "ies"}, newest first.
+      Secrets, signatures and idempotency keys are never stored here or shown — the log records
+      what changed and who changed it, not how the request was authenticated.
     </div>`;
+}
+
+function wpuJson(value) {
+  if (value == null) return "—";
+  try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); }
+}
+function wpuToggleAudit(id) {
+  if (WPU_AUDIT.expanded.has(id)) WPU_AUDIT.expanded.delete(id);
+  else WPU_AUDIT.expanded.add(id);
+  wpuDrawAudit();
+}
+function wpuAuditFilter(key, value) {
+  WPU_AUDIT.filters[key] = value;
+  WPU_AUDIT.expanded.clear();
+  wpuRenderAudit();
+}
+function wpuAuditClear() {
+  WPU_AUDIT.filters = { entityType: "", website: "", actor: "", action: "" };
+  wpuRenderAudit();
 }

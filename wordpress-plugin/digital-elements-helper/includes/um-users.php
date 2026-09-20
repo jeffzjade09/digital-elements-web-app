@@ -55,8 +55,16 @@ add_action('rest_api_init', function () {
  * Capabilities that make a role elevated. Reported in two tiers, because
  * collapsing them into one would make the flag useless.
  *
- * SITE ADMIN — can administer the site or escalate into doing so. Assigning one
- * of these always needs an explicit confirmation.
+ * SITE ADMIN — can administer the site, or execute code on it, or escalate into
+ * doing either. Assigning one of these always needs an explicit confirmation
+ * AND the users:admin scope.
+ *
+ * The list is deliberately broad: install_plugins alone is arbitrary code
+ * execution, and roles carrying it without manage_options are common on real
+ * client sites. It is a deny-list rather than an allow-list because an
+ * allow-list would classify every plugin-defined role (shop_manager and
+ * friends) as elevated, putting a confirmation in front of ordinary work —
+ * which is the failure mode this whole two-tier split exists to avoid.
  *
  * CONTENT RISK — unfiltered_html. Not administration, but it allows storing
  * arbitrary script in content, so it is worth surfacing.
@@ -72,7 +80,24 @@ add_action('rest_api_init', function () {
  * is_site_admin is the narrower one the confirmation actually keys off.
  */
 function deheled_um_site_admin_caps() {
-    return array('manage_options', 'promote_users', 'edit_users', 'delete_users');
+    return array(
+        // Administering the site and its users.
+        'manage_options', 'promote_users', 'edit_users', 'delete_users', 'create_users',
+        'remove_users', 'list_users', 'edit_dashboard',
+        // Capabilities that are code execution in practice. A role holding any
+        // of these can install or edit PHP that runs on the site, which is a
+        // larger grant than "administrator" sounds like — and several of them
+        // exist on real client sites in roles that do NOT hold manage_options
+        // (membership plugins, LMS plugins, agency "Site Manager" roles).
+        'install_plugins', 'activate_plugins', 'edit_plugins', 'delete_plugins', 'update_plugins',
+        'install_themes', 'switch_themes', 'edit_themes', 'delete_themes', 'update_themes',
+        'edit_theme_options', 'update_core', 'edit_files', 'unfiltered_upload',
+        // Bulk data in and out.
+        'import', 'export',
+        // Multisite.
+        'manage_network', 'manage_sites', 'manage_network_options',
+        'manage_network_plugins', 'manage_network_themes', 'manage_network_users',
+    );
 }
 
 function deheled_um_content_risk_caps() {

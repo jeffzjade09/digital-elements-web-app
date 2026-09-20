@@ -210,8 +210,24 @@ Connected websites are enrolled one at a time: the dashboard issues a one-time
 code, someone with access to that site's WP admin pastes it into DE Monitoring,
 and the site redeems it for its own scoped credential. User-management requests
 are signed per request and are **not** authorized by the monitoring license key,
-so a leaked license key can never create an account. Set `USER_MGMT_ENC_KEY` to
-enable the feature; without it teams and staff still work.
+so a leaked license key can never create an account.
+
+Setting it up:
+
+1. Generate the key and restart —
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`
+   into `USER_MGMT_ENC_KEY`. **Back it up**: losing it means re-enrolling every
+   site. Without it, teams and staff still work and the feature reports itself
+   unconfigured.
+2. Let helper plugin **2.6.0** reach each site through the normal update
+   mechanism. Settings → WP Users → **Sync status** shows which sites are still
+   behind; sites with auto-updates off need someone to press Update there.
+3. **Connect each site** — about 30 seconds each. Generate a code on the
+   Websites tab, paste it into that site's DE Monitoring → User management.
+   This always needs someone with access to the client's WP Admin: user
+   management cannot be switched on remotely.
+4. That site's administrator decides whether we may **delete users** or **grant
+   Administrator**. Both are off by default and only they can turn them on.
 
 The roster of teams and staff is seeded by a migration and fully editable
 afterwards. Database changes for this feature live in `db/migrations/`, applied

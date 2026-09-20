@@ -17,12 +17,12 @@ import { CORE_ROLES } from "../usermgmt/roles.js";
 import { wpUserManagers, setWpUserManagers } from "../usermgmt/grants.js";
 import { requirePerm } from "../auth.js";
 import * as credentials from "../usermgmt/credentials.js";
-import { getCapabilities, getCapabilitiesForAll, REQUIRED_API_VERSION } from "../usermgmt/capabilities.js";
+import { getCapabilities, getCapabilitiesForAll, REQUIRED_API_VERSION, READINESS } from "../usermgmt/capabilities.js";
 import { getSiteRoles } from "../usermgmt/roles.js";
 import { runPreflight } from "../usermgmt/preflight.js";
 import { startAssignment, startRemoval, startDeletion, getJob, retryJob } from "../usermgmt/sync.js";
 import { getContentOwnership, reassignContent, planDeletion } from "../usermgmt/contentOwnership.js";
-import { getWebsites, getWebsiteSite } from "../db.js";
+import { getWebsites, getWebsiteSite, query } from "../db.js";
 
 export const router = express.Router();
 
@@ -556,6 +556,14 @@ router.post("/delete-accounts", asyncRoute(async (req, res) => {
 }));
 
 // --------------------------------------------------------------------- audit
+/**
+ * The activity log, filterable by entity, website, actor and action.
+ *
+ * Rows are passed through the redaction helper a SECOND time on the way out.
+ * They were redacted when written, but an entry written by an earlier version —
+ * or by a future caller that forgets — must still never render a secret, a
+ * signature or an idempotency key in a browser.
+ */
 router.get("/audit", asyncRoute(async (req, res) => {
   const entries = await audit.list({
     entityType: String(req.query.entityType || "").trim() || undefined,
@@ -565,7 +573,111 @@ router.get("/audit", asyncRoute(async (req, res) => {
     action: String(req.query.action || "").trim() || undefined,
     limit: req.query.limit,
   });
-  res.json({ ok: true, entries });
+
+  const safe = entries.map((e) => ({
+    ...e,
+    before: audit.redact(e.before),
+    after: audit.redact(e.after),
+  }));
+
+  // Built from what is actually in the log rather than a hardcoded list, so a
+  // new action type appears in the filter the first time it happens.
+  const facets = await audit.facets();
+  res.json({ ok: true, entries: safe, facets });
+}));
+
+/**
+ * Every website assignment, flat.
+ *
+ * One small query rather than one request per person: the Users table needs to
+ * filter and summarise by website and sync state, and doing that per row would
+ * mean N requests to render one screen.
+ */
+router.get("/assignments", asyncRoute(async (req, res) => {
+  const { rows } = await query(
+    `select a.staff_user_id, a.website_id, a.wp_role, a.state, a.managed,
+            a.last_error_code, a.last_synced_at, w.name as website_name
+       from website_user_assignments a
+       left join websites w on w.id = a.website_id
+      order by w.name asc nulls last`
+  );
+  res.json({
+    ok: true,
+    assignments: rows.map((r) => ({
+      staffUserId: r.staff_user_id,
+      websiteId: r.website_id,
+      websiteName: r.website_name,
+      role: r.wp_role,
+      state: r.state,
+      managed: r.managed,
+      errorCode: r.last_error_code,
+      lastSyncedAt: r.last_synced_at,
+    })),
+  });
+}));
+
+// ---------------------------------------------------------------- sync status
+/**
+ * One view of where every connected site stands: readiness, plugin version,
+ * scopes the site has granted, recent job outcomes, and anything left
+ * interrupted by a restart.
+ *
+ * Assembled server-side so the UI makes one request instead of N, and so the
+ * "needs updating" judgement is made in one place.
+ */
+router.get("/sync-status", asyncRoute(async (req, res) => {
+  if (!credentials.isConfigured()) {
+    return res.json({ ok: true, configured: false, sites: [], jobs: [], interrupted: 0 });
+  }
+  const sites = await getWebsites();
+  const caps = await getCapabilitiesForAll(sites, { force: req.query.refresh === "1" });
+
+  const { rows: assignmentRows } = await query(
+    `select website_id, state, count(*)::int n
+       from website_user_assignments group by website_id, state`
+  );
+  const byWebsite = new Map();
+  for (const r of assignmentRows) {
+    if (!byWebsite.has(r.website_id)) byWebsite.set(r.website_id, {});
+    byWebsite.get(r.website_id)[r.state] = r.n;
+  }
+
+  const { rows: jobs } = await query(
+    `select id, kind, status, initiated_email, totals, created_at, finished_at
+       from user_sync_jobs order by created_at desc limit 20`
+  );
+  const { rows: stuck } = await query(
+    `select count(*)::int n from user_sync_operations where status = 'interrupted'`
+  );
+
+  const withCounts = caps.map((c) => ({
+    ...c,
+    assignments: byWebsite.get(c.websiteId) || {},
+    // Distinguishes "hasn't updated yet" from "can't be reached to find out",
+    // which need completely different follow-up.
+    needsPluginUpdate: c.readiness === READINESS.PLUGIN_UPDATE_REQUIRED,
+    needsEnrollment: c.readiness === READINESS.NEEDS_ENROLLMENT,
+  }));
+
+  res.json({
+    ok: true,
+    configured: true,
+    requiredApiVersion: REQUIRED_API_VERSION,
+    sites: withCounts,
+    jobs: jobs.map((j) => ({
+      id: j.id, kind: j.kind, status: j.status,
+      initiatedEmail: j.initiated_email, totals: j.totals,
+      createdAt: j.created_at, finishedAt: j.finished_at,
+    })),
+    interrupted: stuck[0]?.n || 0,
+    summary: {
+      total: withCounts.length,
+      ready: withCounts.filter((c) => c.ready).length,
+      needsUpdate: withCounts.filter((c) => c.needsPluginUpdate).length,
+      needsEnrollment: withCounts.filter((c) => c.needsEnrollment).length,
+      unreachable: withCounts.filter((c) => c.readiness === READINESS.UNREACHABLE).length,
+    },
+  });
 }));
 
 // -------------------------------------------------------------------- grants

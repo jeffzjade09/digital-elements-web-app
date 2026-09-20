@@ -7,9 +7,7 @@ All controls live in this web app. The `digital-elements-helper` plugin's only
 job is to provide the secure API the app calls — there is no user-management
 screen inside the plugin.
 
-> **Status.** The feature works end to end: teams, staff, enrollment, roles,
-> preflight, assignment, and guarded deletion with content reassignment. What
-> remains is polish and the plugin release.
+> **Status.** Complete and released as helper plugin **2.6.0**.
 
 ## Concepts
 
@@ -38,7 +36,7 @@ A role is reported with two flags, and the difference is load-bearing:
 
 | Flag | Means | Effect |
 |---|---|---|
-| `is_site_admin` | holds `manage_options`, `promote_users`, `edit_users` or `delete_users` | **Requires an explicit confirmation** |
+| `is_site_admin` | can administer the site **or execute code on it** — `manage_options`, `promote_users`, `edit_users`, `delete_users`, `install_plugins`, `activate_plugins`, `edit_plugins`, `edit_themes`, `switch_themes`, `edit_files`, `update_core`, `import`/`export`, and the multisite equivalents | **Requires `users:admin` AND an explicit confirmation** |
 | `is_admin_like` | the above, **or** `unfiltered_html` | Shown as a notice |
 
 They are separate because **stock WordPress grants `unfiltered_html` to Editor**,
@@ -49,6 +47,13 @@ worse than not having it.
 
 Both flags come from the site's own capability map, so a plugin-defined role
 that can administer the site is caught the same way Administrator is.
+
+`install_plugins` alone is arbitrary code execution, and roles carrying it
+*without* `manage_options` are common on real client sites — membership and LMS
+plugins, agency "Site Manager" roles, anything built with a role editor. The
+list is a deny-list rather than an allow-list because an allow-list would
+classify every plugin-defined role as elevated, putting a confirmation in front
+of ordinary work, which is the failure mode the two tiers exist to avoid.
 
 ## Who can use it
 
@@ -65,6 +70,67 @@ It is held by:
 The allow-list exists so the grant is visible rather than implied. Editing it
 requires `manageUsers` (admin only), so a grantee cannot widen the grant to
 themselves or anyone else. See `src/auth.js` and `src/usermgmt/grants.js`.
+
+## Setting it up
+
+### 1. On this server, once
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Put that in `USER_MGMT_ENC_KEY` and restart. It encrypts every site's
+credential at rest.
+
+**Back it up with your other secrets.** Losing or changing it makes every stored
+credential undecryptable and every site has to be re-enrolled. Without it the
+dashboard runs exactly as before — teams and staff still work, and the Websites
+tab reports the feature unconfigured rather than failing.
+
+### 2. Roll out the plugin
+
+Helper **2.6.0** carries the `de/v2` API. `/api/plugin/manifest` offers it
+automatically; sites with auto-updates on pick it up within a few hours, and the
+rest need someone to press Update on that site's Plugins screen.
+
+Settings → WP Users → **Sync status** lists exactly which sites are still
+behind. Nothing else can be done from here — we cannot update a site remotely.
+
+### 3. Connect each site (about 30 seconds per site)
+
+1. **Websites** tab → **Connect…** on the site → a code appears.
+2. Open that site's WP Admin → **DE Monitoring** → **User management**, paste the
+   code, press **Connect**.
+3. Back in the dashboard, press **Re-check all**.
+
+The code is valid for 15 minutes and works once. It grants nothing on its own —
+the site must also present its own monitoring license key to redeem it.
+
+**This step always needs someone with access to the client's WP Admin.** That is
+deliberate: user management cannot be switched on remotely, so a compromised
+dashboard cannot enroll a site by itself.
+
+### 4. Decide what each site allows
+
+While in DE Monitoring, that site's administrator chooses whether we may:
+
+- **delete users** (`users:delete`)
+- **grant Administrator** (`users:admin`)
+
+**Both are off by default.** They are switched on locally, per site, and this
+dashboard cannot turn them on — it is the client's kill switch, not ours.
+Reading users, creating and updating them, and reassigning content come with
+enrollment.
+
+### Order of operations
+
+```
+USER_MGMT_ENC_KEY  →  plugin 2.6.0 reaches the site  →  site redeems a code
+                   →  site chooses its scopes        →  assignments can run
+```
+
+A site missing any step shows the reason in Sync status rather than failing
+part-way through a bulk run.
 
 ## Safety rules
 
@@ -84,6 +150,10 @@ These hold across every phase:
   an account becomes managed in the first place.
 - **The last administrator is never stranded.** Demoting or unlinking a site's
   only administrator is refused by the site itself.
+- **A linked account is not ours.** Changing an account's email address or
+  triggering its password reset both hand control to whoever receives the mail,
+  so they are allowed **only for accounts we created**. Linking a client's
+  Editor lets us manage its *role* — nothing more.
 - **No passwords, ever.** New accounts get a generated password that is never
   returned, displayed, logged or stored; WordPress sends its own set-password
   email. If that email fails, it is a **warning on a successful create** — there
@@ -296,7 +366,9 @@ mount point in `src/server.js`.
 | POST | `/websites/:id/enrollment-code` | Issue a one-time connect code |
 | POST | `/websites/:id/rotate-credential` | Revoke and issue a new code |
 | POST | `/websites/:id/revoke-credential` | Disconnect a site |
-| GET | `/audit` | Activity log |
+| GET | `/assignments` | Every website assignment, for the Users filters |
+| GET | `/sync-status` | Per-site readiness, recent runs, interrupted operations |
+| GET | `/audit` | Activity log, filterable by entity / website / actor / action |
 | GET/PUT | `/grants` | The manageWpUsers allow-list (admin only) |
 
 Responses are always `{ ok: true, ... }` or `{ ok: false, error, code? }`.
@@ -453,6 +525,17 @@ keep their role, content and access; we stop administering them. Folding account
 deletion into a team delete would be the most dangerous shortcut in this
 feature, so the return value states `deletesWordPressAccounts: false` explicitly.
 
+## The activity log
+
+Every administrative change: who did it, what changed, on which site, and the
+result. `before`/`after` are redacted **on write and again on read** — an entry
+written by an earlier version, or by a future caller that forgets, still cannot
+render a secret, a signature or an idempotency key in a browser. The log records
+*what changed and who changed it*, never how the request was authenticated.
+
+Filters are built from what is actually in the log, so a new action type appears
+the first time it happens rather than the next time someone remembers to add it.
+
 ## Roadmap
 
 | Phase | Contents |
@@ -462,7 +545,7 @@ feature, so the return value states `deletesWordPressAccounts: false` explicitly
 | 3 ✅ | Reading roles and users from sites, role cache, preflight review |
 | 4 ✅ | Create / update / link / role change, sync jobs, bulk and whole-team assignment, retries |
 | 5 ✅ | Content ownership, reassignment, guarded deletion |
-| 6–7 | Sync dashboard, polish, plugin 2.6.0 release and rollout |
+| 6–7 ✅ | Sync dashboard, activity log, polish, plugin 2.6.0 release and rollout |
 
 ## Testing
 
