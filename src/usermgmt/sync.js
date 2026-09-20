@@ -25,6 +25,7 @@ import { getCapabilities, READINESS } from "./capabilities.js";
 import { callSite, WpError } from "./wpClient.js";
 import { resolveRequestedRole, predict, ACTION } from "./preflight.js";
 import * as audit from "./audit.js";
+import { deleteOnSite, planDeletion } from "./contentOwnership.js";
 
 // Bounded so a bulk run can't open one connection per site at once. Four is
 // enough to keep a dozen sites moving without looking like an attack to any of
@@ -471,6 +472,118 @@ async function runRemovals(jobId, ops, actor) {
       } catch (err) {
         await finishOperation(id, {
           status: "failed", errorCode: err.code || "failed", error: err.message, attempt: 1,
+        });
+      }
+    }
+  });
+  await Promise.all(workers);
+}
+
+/**
+ * Deletes accounts across sites, through the job system.
+ *
+ * Every site is checked independently first, and a site whose account still
+ * owns something is recorded as failed rather than attempted — there is no
+ * "delete anyway". The plugin re-verifies at delete time as well, so a
+ * `has_content` refusal from a site means content appeared between the check
+ * and the call, which is exactly the case this design exists to catch.
+ */
+export async function startDeletion({ staffUserIds = [], websiteIds = [], reassignTargets = {}, confirmed = false }, actor) {
+  if (!confirmed) throw new Error("Deleting accounts needs an explicit confirmation.");
+
+  const staffList = [];
+  for (const id of staffUserIds) {
+    const s = await getStaff(id);
+    if (s) staffList.push(s);
+  }
+  if (!staffList.length) throw new Error("Select at least one person.");
+
+  const sites = [];
+  for (const id of websiteIds) {
+    const site = await getWebsiteSite(id);
+    if (site) sites.push(site);
+  }
+  if (!sites.length) throw new Error("Select at least one website.");
+
+  const job = await createJob({
+    kind: "delete",
+    params: { staffUserIds: staffList.map((s) => s.id), websiteIds, reassignTargets },
+    actor,
+  });
+
+  const ops = [];
+  for (const site of sites) {
+    for (const staff of staffList) {
+      ops.push({ staff, site, requestedRole: null, reassignTarget: reassignTargets[site.id] || null });
+    }
+  }
+
+  runDeletions(job.id, ops, actor)
+    .then(() => finalizeJob(job.id))
+    .catch(async (err) => {
+      console.error("[sync] deletion job failed:", err);
+      await query("update user_sync_jobs set status='failed', finished_at=now() where id=$1", [job.id]);
+    });
+
+  return { jobId: job.id, operations: ops.length, sites: sites.length, people: staffList.length };
+}
+
+async function runDeletions(jobId, ops, actor) {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(CONCURRENCY, ops.length) }, async () => {
+    while (cursor < ops.length) {
+      const op = ops[cursor++];
+      const { id, key } = await recordOperation(jobId, op, "delete");
+      await query("update user_sync_operations set status='processing', started_at=now() where id=$1", [id]);
+
+      // Checked here as well as by the plugin. Two independent verifications of
+      // the one thing that cannot be undone.
+      let plan;
+      try {
+        plan = await planDeletion(op.staff.id, [op.site.id]);
+      } catch (err) {
+        await finishOperation(id, { status: "failed", errorCode: "check_failed", error: err.message, attempt: 1 });
+        continue;
+      }
+      const row = plan.rows[0];
+
+      if (!row.hasAccount) {
+        await finishOperation(id, { status: "skipped", result: { reason: "no account on this website" }, attempt: 0 });
+        continue;
+      }
+      if (!row.canDelete) {
+        await finishOperation(id, {
+          status: "failed", errorCode: "has_content",
+          error: row.blocker || "Still owns content on this website.",
+          result: { summary: row.summary }, attempt: 0,
+        });
+        await audit.record({
+          ...actor, action: "wpuser.delete", entityType: "staff_user", entityId: op.staff.id,
+          websiteId: op.site.id, targetEmail: op.staff.email,
+          before: { owns: row.summary }, after: { refused: "has_content" }, result: "refused",
+        });
+        continue;
+      }
+
+      try {
+        const before = { wpUserId: row.wpUserId, owns: row.summary, roles: row.wpUser?.roles || [] };
+        const result = await deleteOnSite(op.staff.id, op.site.id, {
+          reassignTarget: op.reassignTarget, idempotencyKey: key,
+        });
+        await finishOperation(id, { status: "removed", result: result.result || result, attempt: 1 });
+        await audit.record({
+          ...actor, action: "wpuser.delete", entityType: "staff_user", entityId: op.staff.id,
+          websiteId: op.site.id, targetEmail: op.staff.email,
+          before, after: { deleted: true, reassignedTo: op.reassignTarget || null }, result: "ok",
+        });
+      } catch (err) {
+        await finishOperation(id, {
+          status: "failed", errorCode: err.code || "failed", error: err.message, attempt: 1,
+        });
+        await audit.record({
+          ...actor, action: "wpuser.delete", entityType: "staff_user", entityId: op.staff.id,
+          websiteId: op.site.id, targetEmail: op.staff.email,
+          after: { errorCode: err.code || "failed" }, result: "failed",
         });
       }
     }

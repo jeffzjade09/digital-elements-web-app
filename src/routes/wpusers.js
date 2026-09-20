@@ -20,7 +20,8 @@ import * as credentials from "../usermgmt/credentials.js";
 import { getCapabilities, getCapabilitiesForAll, REQUIRED_API_VERSION } from "../usermgmt/capabilities.js";
 import { getSiteRoles } from "../usermgmt/roles.js";
 import { runPreflight } from "../usermgmt/preflight.js";
-import { startAssignment, startRemoval, getJob, retryJob } from "../usermgmt/sync.js";
+import { startAssignment, startRemoval, startDeletion, getJob, retryJob } from "../usermgmt/sync.js";
+import { getContentOwnership, reassignContent, planDeletion } from "../usermgmt/contentOwnership.js";
 import { getWebsites, getWebsiteSite } from "../db.js";
 
 export const router = express.Router();
@@ -100,15 +101,41 @@ router.delete("/teams/:id", asyncRoute(async (req, res) => {
     const result = await teams.deleteTeam(req.params.id, {
       onUsers: b.onUsers,
       moveToTeamId: b.moveToTeamId,
+      onAssignments: b.onAssignments,
     });
     if (!result) return res.status(404).json({ ok: false, error: "That team no longer exists." });
+
+    // 'remove' releases our management of those accounts. It does NOT delete a
+    // WordPress account — that is a separate per-site operation with its own
+    // content checks, and folding one into the other would be the most
+    // dangerous shortcut in this feature.
+    let unlinkJob = null;
+    if (result.toUnlink.length) {
+      const byStaff = new Map();
+      for (const { staffUserId, websiteId } of result.toUnlink) {
+        if (!byStaff.has(staffUserId)) byStaff.set(staffUserId, []);
+        byStaff.get(staffUserId).push(websiteId);
+      }
+      unlinkJob = await startRemoval({
+        staffUserIds: [...byStaff.keys()],
+        websiteIds: [...new Set(result.toUnlink.map((u) => u.websiteId))],
+      }, audit.actorFrom(req));
+    }
+
     await audit.record({
       ...audit.actorFrom(req),
       action: "team.delete", entityType: "team", entityId: req.params.id,
-      before: result.team,
-      after: { disposition: result.disposition, membersHandled: result.membersHandled, movedToTeamId: result.movedToTeamId },
+      before: { team: result.team, assignments: result.assignmentCount },
+      after: {
+        disposition: result.disposition,
+        membersHandled: result.membersHandled,
+        movedToTeamId: result.movedToTeamId,
+        assignmentDisposition: result.assignmentDisposition,
+        unlinked: result.toUnlink.length,
+        deletedWordPressAccounts: false,
+      },
     });
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, ...result, unlinkJob });
   } catch (err) { return fail(res, err); }
 }));
 
@@ -429,6 +456,102 @@ router.post("/jobs/:id/retry", asyncRoute(async (req, res) => {
       after: { retried: result.retried },
     });
     res.json({ ok: true, ...result });
+  } catch (err) { return fail(res, err); }
+}));
+
+// ------------------------------------------------------ content ownership --
+/**
+ * What an account owns on ONE website, and who could receive it.
+ *
+ * Per website on purpose: a person owns different things on each site, and one
+ * site reporting "nothing here" says nothing about the other four.
+ */
+router.get("/content/:staffUserId/:websiteId", asyncRoute(async (req, res) => {
+  try {
+    const ownership = await getContentOwnership(req.params.staffUserId, req.params.websiteId);
+    res.json({ ok: true, ownership });
+  } catch (err) { return fail(res, err); }
+}));
+
+/**
+ * Moves everything to another user on that site, then re-counts.
+ *
+ * The response carries the VERIFIED remaining count, not a claim that the move
+ * ran. A non-zero remainder is a normal outcome the UI shows — the delete stays
+ * locked either way.
+ */
+router.post("/content/:staffUserId/:websiteId/reassign", asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  if (!b.targetId) return res.status(400).json({ ok: false, error: "Choose a user to receive this content." });
+  try {
+    const before = await getContentOwnership(req.params.staffUserId, req.params.websiteId);
+    const result = await reassignContent(req.params.staffUserId, req.params.websiteId, b.targetId, audit.actorFrom(req));
+
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "wpuser.content_reassigned",
+      entityType: "staff_user", entityId: req.params.staffUserId,
+      websiteId: req.params.websiteId, targetEmail: before.staffEmail,
+      before: { owned: before.summary, total: before.total, comments: before.comments },
+      after: { movedTo: result.target?.email || b.targetId, moved: result.moved, remaining: result.remaining, verified: result.verified },
+      result: result.verified ? "ok" : "partial",
+    });
+    res.json({ ok: true, result });
+  } catch (err) { return fail(res, err); }
+}));
+
+/**
+ * Checks every selected website independently before any deletion is offered.
+ * Writes nothing.
+ */
+router.post("/deletion-plan", asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  const websiteIds = Array.isArray(b.websiteIds) ? b.websiteIds.filter(Boolean) : [];
+  if (!b.staffUserId) return res.status(400).json({ ok: false, error: "Select a person." });
+  if (!websiteIds.length) return res.status(400).json({ ok: false, error: "Select at least one website." });
+  try {
+    const plan = await planDeletion(b.staffUserId, websiteIds);
+    res.json({ ok: true, ...plan });
+  } catch (err) { return fail(res, err); }
+}));
+
+/**
+ * Deletes accounts on selected websites, through the job system.
+ *
+ * Three independent guards stand between this call and a lost post: the plan
+ * above, the re-check inside the job, and the plugin's own re-count at delete
+ * time. Any one of them refusing stops the deletion.
+ */
+router.post("/delete-accounts", asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  const staffUserIds = Array.isArray(b.staffUserIds) ? b.staffUserIds.filter(Boolean) : [];
+  const websiteIds = Array.isArray(b.websiteIds) ? b.websiteIds.filter(Boolean) : [];
+
+  if (!staffUserIds.length) return res.status(400).json({ ok: false, error: "Select at least one person." });
+  if (!websiteIds.length) return res.status(400).json({ ok: false, error: "Select at least one website." });
+  if (b.confirm !== "DELETE") {
+    return res.status(400).json({ ok: false, error: "Type DELETE to confirm removing these accounts." });
+  }
+  if (websiteIds.length > 1 && b.confirmMultipleSites !== true) {
+    return res.status(400).json({
+      ok: false, code: "confirm_multiple_sites",
+      error: `This deletes accounts on ${websiteIds.length} websites. Confirm that explicitly.`,
+    });
+  }
+
+  try {
+    const job = await startDeletion({
+      staffUserIds, websiteIds,
+      reassignTargets: b.reassignTargets && typeof b.reassignTargets === "object" ? b.reassignTargets : {},
+      confirmed: true,
+    }, audit.actorFrom(req));
+
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "wpusers.delete_started", entityType: "sync_job", entityId: job.jobId,
+      after: { people: job.people, sites: job.sites, operations: job.operations },
+    });
+    res.json({ ok: true, ...job });
   } catch (err) { return fail(res, err); }
 }));
 

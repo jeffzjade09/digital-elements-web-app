@@ -65,6 +65,7 @@ require_once DEHELED_PLUGIN_DIR . 'includes/um-auth.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/um-rest.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/um-users.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/um-write.php';
+require_once DEHELED_PLUGIN_DIR . 'includes/um-content.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/license.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/updater.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/admin.php';

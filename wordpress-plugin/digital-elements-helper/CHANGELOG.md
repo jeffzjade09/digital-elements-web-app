@@ -57,6 +57,26 @@ feature ships.
   claim via `add_option()` means two concurrent duplicates can't both win. Only
   successful results are cached, so a corrected retry of a rejected request
   still works.
+- Content ownership and guarded deletion: `GET de/v2/users/{id}/content`
+  (`users:read`), `POST de/v2/users/{id}/reassign` (`content:reassign`) and
+  `DELETE de/v2/users/{id}` (`users:delete`, which is OFF unless this site's own
+  administrator enables it).
+- Ownership is counted across EVERY registered post type, public and private,
+  including attachments and plugin-defined types, broken down by status with
+  scheduled content called out. Authored comments are counted too. Revisions are
+  excluded — they follow their parent.
+- Deletion re-counts ownership INSIDE the delete request and refuses with
+  `has_content` if anything is left. A dashboard can show a correct "0 remaining"
+  and then sit on screen while a post is published or a scheduled post goes
+  live; deleting on the strength of that earlier count would silently destroy
+  content.
+- `wp_delete_user()` is called with no reassignment argument, deliberately.
+  WordPress's own argument moves only posts and links and silently deletes
+  everything else the account owns, so reassignment is a separate, verified step
+  and there is nothing left to pass by the time deletion runs.
+- Reassignment moves every post type and rewrites comment authorship (user id,
+  display name and email), clears the affected caches, then re-counts and
+  returns the verified remainder rather than a claim that the move ran.
 - Roles report two elevation tiers: `is_site_admin` (manage_options,
   promote_users, edit_users, delete_users) and the broader `is_admin_like`
   which also counts `unfiltered_html`. WordPress grants unfiltered_html to

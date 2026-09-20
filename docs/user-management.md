@@ -7,10 +7,9 @@ All controls live in this web app. The `digital-elements-helper` plugin's only
 job is to provide the secure API the app calls — there is no user-management
 screen inside the plugin.
 
-> **Status.** This document describes the whole feature; the sections marked
-> _(later phase)_ are not built yet. Creating, updating and linking accounts now
-> works end to end. **Deleting a WordPress account is not available yet** — it
-> needs the content-ownership checks from the next phase.
+> **Status.** The feature works end to end: teams, staff, enrollment, roles,
+> preflight, assignment, and guarded deletion with content reassignment. What
+> remains is polish and the plugin release.
 
 ## Concepts
 
@@ -93,6 +92,9 @@ These hold across every phase:
   and never touches a WordPress account as a side effect.
 - **Removing someone from the roster** removes them from this app only. Their
   WordPress accounts are left exactly as they are.
+- **Nothing is ever orphaned.** `wp_delete_user()` is never reached while an
+  account still owns anything, and ownership is re-counted *inside the delete
+  request* — not trusted from whatever the dashboard saw earlier.
 
 ## Architecture
 
@@ -111,6 +113,7 @@ src/usermgmt/
   capabilities.js         per-site probe + cache, readiness states
   preflight.js            predicts every (person × website) outcome; writes nothing
   sync.js                 planner, bounded executor, retries, job recovery
+  contentOwnership.js     per-site ownership, reassignment, guarded deletion
 src/routes/wpusers.js     thin Express layer over the modules above
 public/wpusers.{js,css}   the Settings → WP Users interface
 
@@ -119,6 +122,7 @@ wordpress-plugin/digital-elements-helper/includes/
   um-rest.php             the de/v2 namespace and the capabilities probe
   um-users.php            read endpoints: roles, users, existence lookup
   um-write.php            create / update / link / unlink / password reset + guards
+  um-content.php          ownership counts, reassignment, guarded deletion
   um-admin.php            the site's own connect / permissions / disconnect panel
 ```
 
@@ -285,6 +289,10 @@ mount point in `src/server.js`.
 | POST | `/remove` | Stops managing accounts (unlink). Returns `{ jobId }` |
 | GET | `/jobs/:id` | Job progress, polled by the UI |
 | POST | `/jobs/:id/retry` | Retries a job's **failed** operations only |
+| GET | `/content/:staffUserId/:websiteId` | What that account owns on ONE website, and who could receive it |
+| POST | `/content/:staffUserId/:websiteId/reassign` | Moves it, then returns the **verified** remaining count |
+| POST | `/deletion-plan` | Checks every selected website independently. Writes nothing |
+| POST | `/delete-accounts` | Deletes, through the job system. Needs `confirm: "DELETE"` |
 | POST | `/websites/:id/enrollment-code` | Issue a one-time connect code |
 | POST | `/websites/:id/rotate-credential` | Revoke and issue a new code |
 | POST | `/websites/:id/revoke-credential` | Disconnect a site |
@@ -371,6 +379,80 @@ content and its access** — we simply stop managing it. Deleting an account nee
 the content-ownership checks from the next phase; offering deletion without them
 is how content gets orphaned, so the route refuses `deleteAccounts` outright.
 
+## Deleting an account
+
+### Why it is called "Delete from this website"
+
+On single-site WordPress there is no way to remove someone from a site without
+deleting their account. Calling the button anything softer would describe a
+gentler action than the one about to happen.
+
+### The flow, which does not shorten
+
+```
+ownership breakdown  →  pick a recipient  →  reassign
+                     →  the app RE-CHECKS and shows 0 remaining as proof
+                     →  only then does the delete button unlock
+                     →  typed DELETE confirmation
+```
+
+Reassignment gets its own typed confirmation (`REASSIGN`): it destroys nothing,
+but it changes authorship everywhere it appears on the site and undoing it means
+reassigning back by hand. Deleting from more than one website needs a separate
+acknowledgement of that fact.
+
+### Three independent verifications
+
+The zero the administrator sees is **evidence**, not the safety mechanism.
+Between the click and a lost post stand:
+
+1. `planDeletion()` — per website, before anything is offered.
+2. The job's own re-check, immediately before calling the site.
+3. **The plugin's re-count inside the delete request itself.**
+
+Number 3 is the one that matters. A dashboard can show a correct "0 remaining"
+and then sit on screen while an editor publishes a post, a scheduled post goes
+live, or a plugin creates an attachment. Deleting on the strength of that
+earlier count would silently destroy content, so the count is taken again in the
+same request that does the deleting, and a non-zero result refuses outright with
+`has_content`.
+
+### Why not `wp_delete_user($id, $reassign)`
+
+WordPress's own reassignment argument moves **only posts and links**, and
+silently deletes everything else the account owns. So reassignment is a
+separate, verified step, and `wp_delete_user()` is called with **no** second
+argument — by then there is deliberately nothing left to reassign, and passing
+one would hide a failure of the check above.
+
+### What counts as content
+
+Every registered post type, public and private, including `attachment` — a
+rehab site's `location` CPT or a shop's `product` is exactly the content a check
+that only looked at posts and pages would destroy unnoticed. Broken down by
+status, with **scheduled** called out separately: nothing on the site shows it
+yet, and deleting its author is how a launch quietly fails to happen. Authored
+comments count too; post reassignment doesn't move them.
+
+Revisions are excluded — they are copies, and WordPress removes them with their
+parent.
+
+### Per website, always
+
+A person owns different things on each site. One site answering "nothing here"
+says nothing about the other four, so every website is checked, reassigned and
+verified independently.
+
+### Deleting a team
+
+`DELETE /api/wpusers/teams/:id` takes `{ onUsers, moveToTeamId?, onAssignments }`.
+Both dispositions are required when they apply — never guessed.
+
+**`onAssignments: "remove"` means unlink, not delete.** The WordPress accounts
+keep their role, content and access; we stop administering them. Folding account
+deletion into a team delete would be the most dangerous shortcut in this
+feature, so the return value states `deletesWordPressAccounts: false` explicitly.
+
 ## Roadmap
 
 | Phase | Contents |
@@ -379,7 +461,7 @@ is how content gets orphaned, so the route refuses `deleteAccounts` outright.
 | 2 ✅ | Scoped per-site credential, HMAC request signing, `de/v2/capabilities`, enrollment, plugin version compatibility |
 | 3 ✅ | Reading roles and users from sites, role cache, preflight review |
 | 4 ✅ | Create / update / link / role change, sync jobs, bulk and whole-team assignment, retries |
-| 5 | Content ownership, reassignment, guarded deletion |
+| 5 ✅ | Content ownership, reassignment, guarded deletion |
 | 6–7 | Sync dashboard, polish, plugin 2.6.0 release and rollout |
 
 ## Testing
@@ -406,6 +488,11 @@ above all, that a user leaves a site carrying only the fields we chose.
 no generated password reaches a response under any condition.
 `tests/usermgmt-sync.test.mjs` covers the idempotency key, the retry rule and
 the bounded executor.
+`tests/usermgmt-content.test.php` covers ownership counting across custom post
+types, reassignment target validation, every deletion refusal, and above all the
+stale-UI case: content created between the check and the delete must refuse.
+`tests/usermgmt-deletion.test.mjs` covers the ownership summary, per-website
+independence, and the team-delete disposition.
 
 All of them run without a database or a WordPress install.
 

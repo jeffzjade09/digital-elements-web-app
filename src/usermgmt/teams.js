@@ -118,24 +118,50 @@ export async function updateTeam(id, { name, description, defaultWpRole }) {
   return rows[0] ? rowToTeam(rows[0]) : null;
 }
 
+/** How many website assignments this team's members currently hold. */
+export async function teamAssignmentCount(id) {
+  const { rows } = await query(
+    `select count(*)::int n
+       from website_user_assignments a
+       join staff_users s on s.id = a.staff_user_id
+      where s.team_id = $1 and a.state <> 'removed'`,
+    [id]
+  );
+  return rows[0]?.n || 0;
+}
+
 /**
- * Deletes a team. Never implicit about its members.
+ * Deletes a team. Never implicit about its members or their websites.
  *
- * `onUsers` must be given explicitly whenever the team has members:
- *   'unassign' — members stay, with no team
- *   'move'     — members move to `moveToTeamId`
+ * Two dispositions, both required when they apply, because the alternative is
+ * guessing:
  *
- * Deleting a team never touches any WordPress account. Website assignments are
- * handled from the phase that introduces them; until then there are none, and
- * this function states that rather than pretending to decide it.
+ *   onUsers       'unassign' (members stay, with no team) or 'move' to another.
+ *   onAssignments 'keep' (website accounts continue untouched) or 'remove'.
+ *
+ * "remove" means UNLINK — we stop managing those accounts. It does NOT delete
+ * anyone's WordPress account. Deleting a team is an organisational change in
+ * this app; destroying accounts on client sites is a separate, per-site
+ * operation with its own content checks, and quietly folding one into the other
+ * would be the most dangerous shortcut in the whole feature.
+ *
+ * Returns the unlink work for the caller to run as a job, rather than doing it
+ * here: those are per-site calls that can fail individually and need the same
+ * progress and retry handling as any other bulk operation.
  */
-export async function deleteTeam(id, { onUsers, moveToTeamId } = {}) {
+export async function deleteTeam(id, { onUsers, moveToTeamId, onAssignments } = {}) {
   const team = await getTeam(id);
   if (!team) return null;
+
+  const assignments = await teamAssignmentCount(id);
+  let memberIds = [];
 
   if (team.memberCount > 0) {
     if (onUsers !== "unassign" && onUsers !== "move") {
       throw new Error(`"${team.name}" still has ${team.memberCount} member(s). Choose what happens to them before deleting the team.`);
+    }
+    if (assignments > 0 && onAssignments !== "keep" && onAssignments !== "remove") {
+      throw new Error(`Members of "${team.name}" have ${assignments} website assignment(s). Choose whether to keep or release them before deleting the team.`);
     }
     if (onUsers === "move") {
       if (!moveToTeamId || moveToTeamId === id) {
@@ -143,18 +169,43 @@ export async function deleteTeam(id, { onUsers, moveToTeamId } = {}) {
       }
       const target = await getTeam(moveToTeamId);
       if (!target) throw new Error("The team you chose to move members into no longer exists.");
+    }
+
+    const { rows } = await query("select id from staff_users where team_id = $1", [id]);
+    memberIds = rows.map((r) => r.id);
+
+    if (onUsers === "move") {
       await query("update staff_users set team_id=$2, updated_at=now() where team_id=$1", [id, moveToTeamId]);
     } else {
       await query("update staff_users set team_id=null, updated_at=now() where team_id=$1", [id]);
     }
   }
 
+  // Which website assignments the caller should now release, if any.
+  let toUnlink = [];
+  if (onAssignments === "remove" && memberIds.length) {
+    const { rows } = await query(
+      `select staff_user_id, website_id from website_user_assignments
+        where staff_user_id = any($1::uuid[]) and state <> 'removed'`,
+      [memberIds]
+    );
+    toUnlink = rows.map((r) => ({ staffUserId: r.staff_user_id, websiteId: r.website_id }));
+  }
+
   await query("delete from teams where id=$1", [id]);
+
   return {
     team,
     membersHandled: team.memberCount,
+    memberIds,
     disposition: team.memberCount > 0 ? onUsers : "none",
     movedToTeamId: onUsers === "move" ? moveToTeamId : null,
+    assignmentCount: assignments,
+    assignmentDisposition: assignments > 0 ? (onAssignments || "keep") : "none",
+    // Never account deletions — unlinks. Stated in the return value so a caller
+    // cannot mistake one for the other.
+    toUnlink,
+    deletesWordPressAccounts: false,
   };
 }
 
