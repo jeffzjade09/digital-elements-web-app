@@ -98,6 +98,13 @@ behind. Nothing else can be done from here — we cannot update a site remotely.
 
 ### 3. Connect each site (about 30 seconds per site)
 
+> **Check the Websites tab first.** If a site shows **Wrong license**, its plugin
+> is carrying a different website's license key — usually because the install was
+> cloned from a staging copy. A code issued for it will be refused, because the
+> site presents the other website's key when redeeming. Fix the key in that
+> site's DE Monitoring panel first. The dashboard warns before issuing a code.
+
+
 1. **Websites** tab → **Connect…** on the site → a code appears.
 2. Open that site's WP Admin → **DE Monitoring** → **User management**, paste the
    code, press **Connect**.
@@ -105,6 +112,11 @@ behind. Nothing else can be done from here — we cannot update a site remotely.
 
 The code is valid for 15 minutes and works once. It grants nothing on its own —
 the site must also present its own monitoring license key to redeem it.
+
+**If a code is refused**, the site is told only that it was invalid — deliberately,
+so the endpoint can't be used to probe for valid codes or keys. The real reason is
+recorded in the dashboard: **Sync status** lists refusals from the last 7 days with
+what actually went wrong, and the **Activity log** keeps the full history.
 
 **This step always needs someone with access to the client's WP Admin.** That is
 deliberate: user management cannot be switched on remotely, so a compromised

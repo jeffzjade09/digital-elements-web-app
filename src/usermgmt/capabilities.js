@@ -81,7 +81,12 @@ export async function getCapabilities(site, { force = false, maxAgeMs = CACHE_TT
       um_caps_checked_at: new Date().toISOString(),
       // The site is the authority on what it has actually enabled.
       um_scopes: Array.isArray(data.scopes) ? data.scopes : row.um_scopes,
-    }, { siteEnrolled: data.enrolled === true, multisite: data.multisite === true, wpVersion: data.wp_version });
+    }, {
+      siteEnrolled: data.enrolled === true,
+      multisite: data.multisite === true,
+      wpVersion: data.wp_version,
+      licenseSite: typeof data.license_site === "string" ? data.license_site : null,
+    });
   } catch (err) {
     if (!(err instanceof WpError)) throw err;
     await writeCache(site.id, {
@@ -95,7 +100,7 @@ export async function getCapabilities(site, { force = false, maxAgeMs = CACHE_TT
   }
 }
 
-function shape(site, row, { readiness, error, siteEnrolled, multisite, wpVersion } = {}) {
+function shape(site, row, { readiness, error, siteEnrolled, multisite, wpVersion, licenseSite } = {}) {
   const apiVersion = row.um_api_version;
   const caps = row.um_caps || [];
   const enrolledHere = !!row.um_key_id;
@@ -123,6 +128,11 @@ function shape(site, row, { readiness, error, siteEnrolled, multisite, wpVersion
     enrolledAt: row.um_enrolled_at || null,
     multisite: multisite === true,
     wpVersion: wpVersion || null,
+    // Which dashboard website this site's plugin believes it belongs to. A
+    // mismatch is the commonest reason an enrollment code is refused, and it is
+    // knowable before one is issued.
+    licenseSite: licenseSite || null,
+    licenseMismatch: !!(licenseSite && site.name && licenseSite !== site.name),
     checkedAt: row.um_caps_checked_at || null,
     error: error || row.um_caps_error || null,
     message: readinessMessage(state, row, site),

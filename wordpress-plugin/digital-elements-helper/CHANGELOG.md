@@ -1,5 +1,19 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.6.1
+
+- The capabilities endpoint now reports which website in the Digital Elements
+  dashboard this site's license key is registered to.
+
+  A plugin carrying another site's key — usually because the install was cloned
+  from a staging copy — is the commonest reason an enrollment code is refused,
+  and the refusal the dashboard can safely return deliberately says nothing
+  about why. Reporting the linked website lets the dashboard warn before a code
+  is issued and someone walks over to paste it in. It is the site's own name,
+  already shown in this plugin's own admin panel, so nothing new is disclosed.
+
+- No behaviour change on the site itself.
+
 ## 2.6.0 — user management (de/v2)
 
 Adds centralized user management, controlled entirely from the Digital Elements

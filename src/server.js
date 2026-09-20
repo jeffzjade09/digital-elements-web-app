@@ -6,6 +6,7 @@ import "dotenv/config";
 import express from "express";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { installFetchCounter, getStats, getSiteStats, getSiteSeries, getSiteRequests, getHostTotals } from "./metrics.js";
@@ -31,7 +32,7 @@ import { buildImageReport } from "./imageReport.js";
 import { runMigrations } from "./migrate.js";
 import { loadGrants, startGrantRefresh } from "./usermgmt/grants.js";
 import wpUsersRouter from "./routes/wpusers.js";
-import { redeemEnrollmentCode, isConfigured as isUserMgmtConfigured } from "./usermgmt/credentials.js";
+import { redeemEnrollmentCode, describeEnrollmentFailure, isConfigured as isUserMgmtConfigured } from "./usermgmt/credentials.js";
 import { record as recordAudit } from "./usermgmt/audit.js";
 import { sweepInterruptedOperations } from "./usermgmt/sync.js";
 
@@ -167,6 +168,29 @@ app.post("/api/plugin/enroll", rateLimit({ name: "enroll", windowMs: 60_000, max
     const result = await redeemEnrollmentCode({ code, licenseKey, ip: req.ip });
     if (!result.ok) {
       console.warn(`[enroll] refused (${result.reason}) from ${req.ip}`);
+      // Recorded so the refusal is visible in the dashboard instead of only in
+      // a server log nobody reads. "It just says invalid" was the single most
+      // confusing part of the first rollout: license_mismatch in particular
+      // means a real, fixable thing (the plugin is linked to a different site)
+      // that the generic message gives no hint of.
+      //
+      // The HTTP response is unchanged — still one generic refusal — so this
+      // discloses nothing to whoever sent the request.
+      await recordAudit({
+        action: "site.enroll_refused",
+        entityType: "website",
+        entityId: result.websiteId || null,
+        websiteId: result.websiteId || null,
+        ip: req.ip,
+        result: "refused",
+        after: {
+          reason: result.reason,
+          explanation: describeEnrollmentFailure(result.reason),
+          site: result.siteName || null,
+          pluginVersion: b.plugin_version || null,
+          reportedSiteUrl: typeof b.site_url === "string" ? b.site_url.slice(0, 200) : null,
+        },
+      });
       return refuse();
     }
     await recordAudit({
@@ -187,15 +211,74 @@ app.get("/login", (req, res) => res.sendFile(path.join(PUBLIC, "login.html")));
 app.get("/logo.png", (req, res) => res.sendFile(path.join(PUBLIC, "logo.png")));
 
 // ---- Everything below requires a signed-in user ----
-app.get("/", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "index.html")));
+app.get("/", requireAuth, sendDashboard);
 // Website detail dashboard — same SPA, routed client-side.
-app.get("/websites/:id", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "index.html")));
+app.get("/websites/:id", requireAuth, sendDashboard);
+
+/* ---- Dashboard assets, versioned -----------------------------------------
+ * A deploy that changes wpusers.js has to reach every open browser, and a
+ * browser that keeps a cached copy is how a fixed bug appears to survive a
+ * deploy. The fix is a URL that changes when the file does.
+ *
+ * The version is a hash of the files' CONTENT, not the package version or a
+ * timestamp: a deploy that doesn't touch them keeps the same URL, so caches
+ * stay warm, and a deploy that does touch them always busts. Computed once at
+ * boot — the process restarts on deploy, which is exactly when it could change.
+ */
+function assetVersion() {
+  try {
+    const h = crypto.createHash("sha1");
+    for (const f of ["wpusers.js", "wpusers.css"]) h.update(fs.readFileSync(path.join(PUBLIC, f)));
+    return h.digest("hex").slice(0, 10);
+  } catch {
+    // Never let a missing file stop the dashboard booting; fall back to a
+    // per-process value, which still busts on restart.
+    return String(Date.now());
+  }
+}
+const ASSET_VERSION = assetVersion();
+
+// index.html carries the versioned URLs, so it must never itself be cached —
+// otherwise the browser keeps asking for yesterday's asset version.
+const indexHtml = (() => {
+  try {
+    return fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8")
+      .replace(/__ASSET_VERSION__/g, ASSET_VERSION);
+  } catch {
+    return null;
+  }
+})();
+function sendDashboard(req, res) {
+  if (!indexHtml) return res.status(500).send("Dashboard is unavailable.");
+  res.set("Cache-Control", "no-store");
+  res.type("html").send(indexHtml);
+}
 
 // The user-management UI's own assets. There is no static middleware in this
 // app — every file is served by an explicit route — so these need one too.
 // Behind requireAuth to match the page that loads them.
-app.get("/wpusers.js", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "wpusers.js")));
-app.get("/wpusers.css", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "wpusers.css")));
+//
+// Cached hard BECAUSE the URL is content-addressed: a changed file gets a
+// different URL, so there is no stale-copy risk and no revalidation round trip.
+function sendAsset(name, type) {
+  return (req, res) => {
+    if (req.query.v === ASSET_VERSION) {
+      res.set("Cache-Control", "public, max-age=31536000, immutable");
+    } else {
+      // An unversioned or outdated URL — usually a cached page from before this
+      // deploy. Serve the current file, but don't let it be cached under that URL.
+      res.set("Cache-Control", "no-cache");
+    }
+    res.type(type);
+    res.sendFile(path.join(PUBLIC, name));
+  };
+}
+app.get("/wpusers.js", requireAuth, sendAsset("wpusers.js", "application/javascript"));
+app.get("/wpusers.css", requireAuth, sendAsset("wpusers.css", "text/css"));
+
+// Exposed so the dashboard can tell the user which build they are looking at
+// when something behaves unexpectedly.
+app.get("/api/asset-version", requireAuth, (req, res) => res.json({ ok: true, version: ASSET_VERSION }));
 
 app.get("/api/me", requireAuth, (req, res) => {
   res.json({ ok: true, user: { email: req.user.email, name: req.user.name, role: req.user.role, theme: req.user.theme || "dark" }, perms: permsFor(req.user.role, req.user.email) });

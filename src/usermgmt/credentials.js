@@ -204,18 +204,22 @@ export async function redeemEnrollmentCode({ code, licenseKey, ip }) {
     [hashCode(code)]
   );
   const row = rows[0];
+  // The reason is for OUR log, not for the caller. The HTTP response stays a
+  // single generic refusal either way — see /api/plugin/enroll — so this can
+  // name the real cause without becoming an oracle for valid codes or keys.
   if (!row) return { ok: false, reason: "unknown_code" };
-  if (row.redeemed_at) return { ok: false, reason: "already_redeemed" };
-  if (new Date(row.expires_at).getTime() < Date.now()) return { ok: false, reason: "expired" };
+  const site = { websiteId: row.website_id, siteName: row.name };
+  if (row.redeemed_at) return { ok: false, reason: "already_redeemed", ...site };
+  if (new Date(row.expires_at).getTime() < Date.now()) return { ok: false, reason: "expired", ...site };
 
   // Constant-time compare so this can't be used as a license-key oracle.
   const provided = Buffer.from(String(licenseKey || ""), "utf8");
   const expected = Buffer.from(String(row.license_key || ""), "utf8");
   if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
-    return { ok: false, reason: "license_mismatch" };
+    return { ok: false, reason: "license_mismatch", ...site };
   }
   if (row.license_expires_at && new Date(row.license_expires_at).getTime() < Date.now()) {
-    return { ok: false, reason: "license_expired" };
+    return { ok: false, reason: "license_expired", ...site };
   }
 
   // Mark redeemed first, and only if it is still unredeemed, so two concurrent
@@ -224,7 +228,7 @@ export async function redeemEnrollmentCode({ code, licenseKey, ip }) {
     "update um_enrollment_codes set redeemed_at = now(), redeemed_ip = $2 where id = $1 and redeemed_at is null returning id",
     [row.id, ip || null]
   );
-  if (!claim.rows.length) return { ok: false, reason: "already_redeemed" };
+  if (!claim.rows.length) return { ok: false, reason: "already_redeemed", ...site };
 
   const credential = generateCredential();
   await storeCredential(row.website_id, { ...credential, scopes: DEFAULT_SCOPES });
@@ -236,6 +240,25 @@ export async function redeemEnrollmentCode({ code, licenseKey, ip }) {
     secret: credential.secret,
     scopes: DEFAULT_SCOPES,
   };
+}
+
+/**
+ * What each refusal means, in words an administrator can act on.
+ *
+ * Kept here so the activity log and the dashboard say the same thing, and so
+ * the generic HTTP response stays the only thing the outside world sees.
+ */
+export const ENROLLMENT_FAILURES = {
+  unknown_code: "The code wasn't recognised. It may have been mistyped, already used, or superseded by a newer one.",
+  already_redeemed: "That code had already been used. Generate a fresh one.",
+  expired: "The code had expired — they last 15 minutes. Generate a fresh one.",
+  license_mismatch: "The plugin on that site is using a different website's license key, so the code was refused. Check which website that site's DE Monitoring panel is linked to.",
+  license_expired: "That website's monitoring license has expired, so enrollment was refused. Renew it first.",
+  not_configured: "User management isn't configured on this dashboard yet.",
+};
+
+export function describeEnrollmentFailure(reason) {
+  return ENROLLMENT_FAILURES[reason] || "The code was refused.";
 }
 
 // Housekeeping: expired, unredeemed codes are dead weight.
