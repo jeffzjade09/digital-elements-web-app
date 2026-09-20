@@ -63,6 +63,7 @@ require_once DEHELED_PLUGIN_DIR . 'includes/rest.php';
 // credential — see includes/um-auth.php for why the license key is not reused.
 require_once DEHELED_PLUGIN_DIR . 'includes/um-auth.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/um-rest.php';
+require_once DEHELED_PLUGIN_DIR . 'includes/um-users.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/license.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/updater.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/admin.php';

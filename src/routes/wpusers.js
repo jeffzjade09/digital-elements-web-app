@@ -18,6 +18,8 @@ import { wpUserManagers, setWpUserManagers } from "../usermgmt/grants.js";
 import { requirePerm } from "../auth.js";
 import * as credentials from "../usermgmt/credentials.js";
 import { getCapabilities, getCapabilitiesForAll, REQUIRED_API_VERSION } from "../usermgmt/capabilities.js";
+import { getSiteRoles } from "../usermgmt/roles.js";
+import { runPreflight } from "../usermgmt/preflight.js";
 import { getWebsites, getWebsiteSite } from "../db.js";
 
 export const router = express.Router();
@@ -263,6 +265,57 @@ router.post("/websites/:id/revoke-credential", asyncRoute(async (req, res) => {
     action: "site.credential_revoked", entityType: "website", entityId: site.id, websiteId: site.id,
   });
   res.json({ ok: true, capabilities: await getCapabilities(site, { force: true }) });
+}));
+
+/**
+ * The roles this site will actually accept.
+ *
+ * Read from the site, not assumed: plugins add roles freely and
+ * get_editable_roles() is where owners restrict what may be assigned. Served
+ * from a cache; `?refresh=1` re-asks the site.
+ *
+ * A site we can't reach returns its cached list with `stale: true` rather than
+ * an error — an unreachable site shouldn't empty a role picker that worked a
+ * minute ago.
+ */
+router.get("/websites/:id/roles", asyncRoute(async (req, res) => {
+  const site = await getWebsiteSite(req.params.id);
+  if (!site) return res.status(404).json({ ok: false, error: "Unknown website." });
+  const result = await getSiteRoles(site, { force: req.query.refresh === "1" });
+  res.json({ ok: true, ...result, site: { id: site.id, name: site.name, url: site.url } });
+}));
+
+// ----------------------------------------------------------------- preflight
+/**
+ * What WOULD happen for every (person × website) pair. Writes nothing.
+ *
+ * This is what the review screen renders, and it is the only thing standing
+ * between a bulk assignment and discovering its problems one site at a time
+ * half way through. Applying the plan is a separate, explicit call in the next
+ * phase — there is deliberately no "preflight and go".
+ */
+router.post("/preflight", asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  const staffUserIds = Array.isArray(b.staffUserIds) ? b.staffUserIds.filter(Boolean) : [];
+  const websiteIds = Array.isArray(b.websiteIds) ? b.websiteIds.filter(Boolean) : [];
+  const roleOverrides = b.roleOverrides && typeof b.roleOverrides === "object" ? b.roleOverrides : {};
+
+  if (!staffUserIds.length && !b.teamId) {
+    return res.status(400).json({ ok: false, error: "Select at least one person, or a team." });
+  }
+  if (!websiteIds.length) {
+    return res.status(400).json({ ok: false, error: "Select at least one website." });
+  }
+  // Bounded so one request can't fan out across the whole estate. The cap is on
+  // the pair count, which is what actually costs a round trip per site.
+  if (staffUserIds.length * websiteIds.length > 500) {
+    return res.status(400).json({ ok: false, error: "That's too many combinations to check at once. Narrow the selection." });
+  }
+
+  try {
+    const result = await runPreflight({ staffUserIds, teamId: b.teamId || null, websiteIds, roleOverrides });
+    res.json({ ok: true, ...result });
+  } catch (err) { return fail(res, err); }
 }));
 
 // --------------------------------------------------------------------- audit

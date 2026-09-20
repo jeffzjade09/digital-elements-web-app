@@ -170,3 +170,18 @@ create table if not exists um_enrollment_codes (
   created_by  uuid references app_users(id) on delete set null,
   created_at  timestamptz not null default now()
 );
+
+-- Per-website WordPress role cache (migration 004). Connected sites don't share
+-- a role list: plugins add roles, and get_editable_roles() is where owners
+-- restrict what may be assigned. A cache, not a source of truth — safe to drop.
+create table if not exists wp_role_cache (
+  website_id       uuid not null references websites(id) on delete cascade,
+  slug             text not null,
+  name             text not null,
+  is_admin_like    boolean not null default false,  -- incl. unfiltered_html
+  is_site_admin    boolean not null default false,  -- manage_options & friends
+  capability_count int not null default 0,
+  fetched_at       timestamptz not null default now(),
+  primary key (website_id, slug)
+);
+-- Also added to `websites` by 004: um_default_role, um_roles_fetched_at
