@@ -1,11 +1,22 @@
 # Changelog — Digital Elements Helper Plugin
 
-## Unreleased — user management (de/v2)
+## 2.6.0 — user management (de/v2)
 
-Not yet released. The version header deliberately stays at 2.5.0 while this is
-built, so `/api/plugin/manifest` never offers client sites an update to a
-half-finished feature. It is bumped once, in the final phase, when the whole
-feature ships.
+Adds centralized user management, controlled entirely from the Digital Elements
+dashboard. **Installing this update changes nothing on your site by itself.**
+The feature stays dormant until an administrator of this site connects it from
+DE Monitoring, and stays limited to what that administrator allows.
+
+What it can never do, regardless of what the dashboard asks:
+
+- touch an account it did not create, unless you deliberately link that account
+- change the email address of, or send a password reset to, an account it did
+  not create — linking lets it manage that account's **role**, nothing more
+- delete a user, or grant Administrator or any role that can install plugins or
+  edit files, unless you switch those on here
+- delete a user who still owns any content — ownership is re-counted at the
+  moment of deletion, so nothing is ever orphaned
+- remove your site's last administrator
 
 - New `de/v2` REST namespace for centralized user management, separate from
   `wpmonitor/v1`. Monitoring is untouched: sites that never update keep working
@@ -57,6 +68,13 @@ feature ships.
   claim via `add_option()` means two concurrent duplicates can't both win. Only
   successful results are cached, so a corrected retry of a rejected request
   still works.
+- Reassignment and deletion both refuse an account this plugin did not create
+  or that you did not link. Reassignment rewrites authorship and overwrites
+  comment author details in place, so it cannot be undone by running it
+  backwards, and is guarded exactly like deletion.
+- Linking an existing account requires an explicit confirmation of its own, and
+  an account that was linked rather than created can never have its email
+  changed or a password reset sent from the dashboard.
 - Content ownership and guarded deletion: `GET de/v2/users/{id}/content`
   (`users:read`), `POST de/v2/users/{id}/reassign` (`content:reassign`) and
   `DELETE de/v2/users/{id}` (`users:delete`, which is OFF unless this site's own
@@ -77,9 +95,11 @@ feature ships.
 - Reassignment moves every post type and rewrites comment authorship (user id,
   display name and email), clears the affected caches, then re-counts and
   returns the verified remainder rather than a claim that the move ran.
-- Roles report two elevation tiers: `is_site_admin` (manage_options,
-  promote_users, edit_users, delete_users) and the broader `is_admin_like`
-  which also counts `unfiltered_html`. WordPress grants unfiltered_html to
+- Roles report two elevation tiers. `is_site_admin` covers administering the
+  site or executing code on it — manage_options, promote_users, edit_users,
+  delete_users, install_plugins, activate_plugins, edit_plugins, edit_themes,
+  switch_themes, edit_files, update_core, import/export and the multisite
+  equivalents. The broader `is_admin_like` also counts `unfiltered_html`. WordPress grants unfiltered_html to
   Editor, so keeping them separate stops a confirmation firing on the most
   ordinary assignment there is.
 

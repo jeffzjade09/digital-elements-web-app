@@ -71,6 +71,26 @@ export async function record(entry) {
   }
 }
 
+/**
+ * Distinct values worth filtering on, taken from the log itself.
+ *
+ * Built from what has actually happened rather than a hardcoded list, so a new
+ * action type appears in the filter the first time it occurs instead of the
+ * next time someone remembers to add it.
+ */
+export async function facets() {
+  const [actions, actors, entityTypes] = await Promise.all([
+    query("select distinct action from audit_log order by action"),
+    query("select distinct actor_email from audit_log where actor_email is not null order by actor_email"),
+    query("select distinct entity_type from audit_log where entity_type is not null order by entity_type"),
+  ]);
+  return {
+    actions: actions.rows.map((r) => r.action),
+    actors: actors.rows.map((r) => r.actor_email),
+    entityTypes: entityTypes.rows.map((r) => r.entity_type),
+  };
+}
+
 // Newest first. Every filter is optional; `limit` is clamped so a caller can't
 // ask for the whole table.
 export async function list({ entityType, entityId, websiteId, actorEmail, action, limit = 100 } = {}) {

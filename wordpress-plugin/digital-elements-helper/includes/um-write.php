@@ -11,7 +11,14 @@
  *
  *   MANAGED-ONLY — every mutating route refuses an account without _de_managed.
  *     Clients' own accounts are not ours to touch. /link is the single
- *     exception, and it is an explicit, separate action.
+ *     exception, and it requires its own explicit confirmation.
+ *
+ *   CREATED-BY-US — a stronger claim than "managed", and the one that gates
+ *     account TAKEOVER. Changing an email address or triggering a password
+ *     reset both hand control of an account to whoever receives the mail, so
+ *     they are allowed only for accounts we created. Without this, linking a
+ *     client's Editor, changing its address and requesting a reset would be a
+ *     complete takeover using nothing but the default write scope.
  *
  *   ROLE WHITELIST — the target role must exist in get_editable_roles(). Never
  *     an arbitrary string: an unknown slug handed to add_role() would create a
@@ -34,6 +41,23 @@
  */
 
 if (!defined('ABSPATH')) { exit; }
+
+/**
+ * Marks an account this tool CREATED, as opposed to one it was allowed to
+ * manage. Set once at creation and never cleared — linking and unlinking move
+ * _de_managed around, but they cannot make us the originator of an account we
+ * did not create.
+ *
+ * The distinction carries real weight: changing an account's email address or
+ * triggering its password reset is, in effect, taking the account over. That is
+ * reasonable for an account we made for a member of staff, and is not
+ * reasonable for a client's own Editor that we were permitted to re-role.
+ */
+define('DEHELED_UM_CREATED_META', '_de_created');
+
+function deheled_um_user_was_created_by_us($user_id) {
+    return get_user_meta((int) $user_id, DEHELED_UM_CREATED_META, true) === '1';
+}
 
 add_action('rest_api_init', function () {
     register_rest_route(DEHELED_UM_NAMESPACE, '/users', array(
@@ -310,6 +334,11 @@ function deheled_um_rest_create_user($request) {
 
         update_user_meta($user_id, DEHELED_UM_MANAGED_META, '1');
         update_user_meta($user_id, '_de_managed_at', time());
+        // Durable, and deliberately NOT cleared by unlink: "did we create this
+        // account?" must stay answerable for the life of the account. An
+        // account we merely linked is a client's account we were allowed to
+        // administer, which is a weaker claim than one we made ourselves.
+        update_user_meta($user_id, DEHELED_UM_CREATED_META, '1');
 
         $warnings = deheled_um_notify_new_user($user_id);
 
@@ -407,7 +436,18 @@ function deheled_um_rest_update_user($request) {
         $changed = array();
 
         $email = $request->get_param('email');
-        if ($email !== null) {
+        if ($email !== null && (string) $email !== (string) $user->user_email) {
+            // Changing the address IS taking the account over: the next password
+            // reset goes to the new address. Allowed for an account we created
+            // for a member of staff; refused for a client's own account we were
+            // merely permitted to administer.
+            if (!deheled_um_user_was_created_by_us($user->ID)) {
+                return deheled_um_fail(
+                    'linked_account_protected',
+                    'This account belongs to the website, not to us. Its email address can\'t be changed from here.',
+                    403
+                );
+            }
             $email = sanitize_email((string) $email);
             if ($email === '' || !is_email($email)) {
                 return deheled_um_fail('invalid_email', 'A valid email address is required.', 400);
@@ -473,8 +513,19 @@ function deheled_um_rest_link_user($request) {
             return rest_ensure_response(deheled_um_ok('skipped', $user, array(), array('already_linked' => true)));
         }
 
-        // Adopting an administrator is a bigger step than adopting an editor:
-        // once linked, the dashboard can change that account.
+        // Adopting ANY account we did not create is a deliberate act, not a
+        // side effect of a bulk run. Without this, /link is a door into every
+        // account on the site that happens not to be an administrator.
+        if (!$request->get_param('confirm_link')) {
+            return deheled_um_fail(
+                'link_requires_confirmation',
+                'That account already exists on this website and wasn\'t created by us. Confirm explicitly to start managing it.',
+                409
+            );
+        }
+
+        // Adopting an administrator is a bigger step again: once linked, the
+        // dashboard can change that account's role.
         if (deheled_um_user_has_role_matching($user, 'deheled_um_role_is_site_admin')) {
             if (!in_array('users:admin', deheled_um_scopes(), true)) {
                 return deheled_um_fail('scope_denied', 'This website hasn\'t allowed the dashboard to manage administrator accounts.', 403);
@@ -532,6 +583,17 @@ function deheled_um_rest_password_reset($request) {
 
         $managed = deheled_um_require_managed($user);
         if (deheled_um_is_failure($managed)) return $managed;
+
+        // Same reasoning as the email change: sending a reset link is a route
+        // into the account. Ours to offer for an account we created; not ours
+        // for a client's own account.
+        if (!deheled_um_user_was_created_by_us($user->ID)) {
+            return deheled_um_fail(
+                'linked_account_protected',
+                'This account belongs to the website, not to us. Use its own Lost Password link instead.',
+                403
+            );
+        }
 
         $result = retrieve_password($user->user_login);
         if (is_wp_error($result)) {

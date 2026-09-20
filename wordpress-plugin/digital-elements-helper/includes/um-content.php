@@ -5,6 +5,11 @@
  * This is the only file in the plugin that can destroy something a client
  * cannot get back, so it is built around one rule:
  *
+ *   MANAGED ONLY. Reassignment and deletion both refuse an account without
+ *   _de_managed. Rewriting a client's own authorship is not recoverable by
+ *   running the reassignment backwards — the comment author name and email are
+ *   overwritten in place — so it is guarded exactly like deletion.
+ *
  *   NOTHING IS EVER ORPHANED. wp_delete_user() is never reached while the
  *   account still owns anything, and ownership is re-counted AT DELETE TIME
  *   rather than trusted from whatever the dashboard saw earlier.
@@ -215,6 +220,14 @@ function deheled_um_rest_reassign($request) {
 
         $user = deheled_um_require_user($request);
         if (deheled_um_is_failure($user)) return $user;
+
+        // Reassignment is destructive in a way that is easy to miss: it rewrites
+        // authorship of every post the account owns, and overwrites the stored
+        // name and email on its comments IN PLACE. Doing that to a client's own
+        // account would be unrecoverable by re-running it backwards, so the
+        // managed-only rule applies here exactly as it does to deleting.
+        $managed = deheled_um_require_managed($user);
+        if (deheled_um_is_failure($managed)) return $managed;
 
         $target = deheled_um_require_reassign_target($request->get_param('target_id'), $user->ID);
         if (deheled_um_is_failure($target)) return $target;

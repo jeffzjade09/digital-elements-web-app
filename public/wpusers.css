@@ -127,3 +127,12 @@
 .wpu-owned { font-size: 13px; font-weight: 600; color: var(--warn); margin-bottom: 10px; }
 .wpu-delsite-row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
 .wpu-delsite-row select { flex: 1; min-width: 180px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 8px 10px; font-size: 12.5px; }
+
+/* Activity log detail */
+.wpu-audit-row { cursor: pointer; }
+.wpu-audit-detail td { background: var(--inset); padding: 0; }
+.wpu-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft); }
+.wpu-diff > div { background: var(--inset); padding: 12px 14px; min-width: 0; }
+.wpu-diff-head { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); margin-bottom: 7px; }
+.wpu-diff pre { margin: 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; }
+@media (max-width: 760px) { .wpu-diff { grid-template-columns: 1fr; } }

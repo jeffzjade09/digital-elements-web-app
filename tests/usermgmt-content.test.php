@@ -416,6 +416,19 @@ ok('a valid target passes', deheled_um_require_reassign_target(31, 30) instanceo
 
 /* ----------------------------------------------------------- reassigning -- */
 
+echo "\n--- a client's own content is never reassigned ---\n";
+// Reassignment rewrites authorship of every post the account owns AND
+// overwrites the stored name and email on its comments in place, so it cannot
+// be undone by running it backwards. It is guarded exactly like deleting.
+reset_all();
+mkuser(38, array('author'), false);      // a client's own account
+mkuser(39, array('editor'));
+mkpost(1, 38, 'post', 'publish');
+eq('refused as not_managed',
+   code(deheled_um_rest_reassign(req(array('id' => 38, 'target_id' => 39)))), 'not_managed');
+eq('...and their content is untouched', $GLOBALS['__posts'][1]['author'], 38);
+eq('...the recipient gained nothing', deheled_um_count_owned_content(39)['total'], 0);
+
 echo "\n--- reassignment moves everything and verifies ---\n";
 reset_all();
 mkuser(40); mkuser(41, array('editor'));

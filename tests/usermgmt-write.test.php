@@ -246,10 +246,18 @@ function reset_site($scopes = null) {
     $GLOBALS['__mail_short'] = null;
     $GLOBALS['__next_id'] = 100;
 }
-function make_user($a, $managed = false) {
+/**
+ * `$managed` means an account we created and manage, which is the ordinary
+ * case; pass `$created = false` to model a client's own account that we were
+ * merely permitted to manage, where the takeover guards apply.
+ */
+function make_user($a, $managed = false, $created = true) {
     $u = new WP_User($a);
     $GLOBALS['__users'][] = $u;
-    if ($managed) $GLOBALS['__usermeta'][$u->ID]['_de_managed'] = '1';
+    if ($managed) {
+        $GLOBALS['__usermeta'][$u->ID]['_de_managed'] = '1';
+        if ($created) $GLOBALS['__usermeta'][$u->ID]['_de_created'] = '1';
+    }
     return $u;
 }
 
@@ -396,8 +404,14 @@ eq('unlink refuses... actually skips, since it is already unmanaged',
    body(deheled_um_rest_unlink_user(req(array('id' => 50))))['result'], 'skipped');
 eq('their role is untouched', $theirs->roles[0], 'editor');
 
-echo "\n--- link is the only door in ---\n";
-$linked = deheled_um_rest_link_user(req(array('id' => 50)));
+echo "\n--- link is the only door in, and it is not an accident ---\n";
+// Without this, /link is a door into every non-administrator account on the
+// site, openable with nothing but the default write scope.
+eq('linking an account we did not create needs its own confirmation',
+   code(deheled_um_rest_link_user(req(array('id' => 50)))), 'link_requires_confirmation');
+ok('...and the account is untouched', deheled_um_user_is_managed(50) === false);
+
+$linked = deheled_um_rest_link_user(req(array('id' => 50, 'confirm_link' => true)));
 eq('link adopts the account', body($linked)['result'], 'linked');
 ok('...setting the managed flag', deheled_um_user_is_managed(50));
 ok('...and recording that it was linked, not created', get_user_meta(50, '_de_linked', true) === '1');
@@ -406,10 +420,31 @@ eq('...leaving the role alone', $theirs->roles[0], 'editor');
 eq('PATCH now works', body(deheled_um_rest_update_user(req(array('id' => 50, 'role' => 'author'))))['result'], 'updated');
 eq('...and applied the role', $theirs->roles[0], 'author');
 
+echo "\n--- but a linked account can never be taken over ---\n";
+// Linking a client's Editor, changing its address and requesting a reset would
+// be a complete account takeover using only the default write scope. Both steps
+// are refused for any account we did not create ourselves.
+eq('its email address cannot be changed',
+   code(deheled_um_rest_update_user(req(array('id' => 50, 'email' => 'attacker@evil.test')))),
+   'linked_account_protected');
+eq('...and the address is unchanged', $theirs->user_email, 'client@theirsite.com');
+eq('a password reset on it is refused',
+   code(deheled_um_rest_password_reset(req(array('id' => 50)))), 'linked_account_protected');
+// The role is what we were allowed to manage, and that still works.
+eq('but its role can still be managed',
+   body(deheled_um_rest_update_user(req(array('id' => 50, 'role' => 'editor'))))['result'], 'updated');
+
 $unlinked = deheled_um_rest_unlink_user(req(array('id' => 50)));
 eq('unlink releases it', body($unlinked)['result'], 'unlinked');
 ok('...clearing the flag', deheled_um_user_is_managed(50) === false);
-eq('...but leaving the account and its role in place', $theirs->roles[0], 'author');
+eq('...but leaving the account and its role in place', $theirs->roles[0], 'editor');
+// Unlink must not be able to launder a client's account into one that looks
+// like ours: re-linking it still cannot change its address.
+deheled_um_rest_link_user(req(array('id' => 50, 'confirm_link' => true)));
+eq('re-linking does not make it ours',
+   code(deheled_um_rest_update_user(req(array('id' => 50, 'email' => 'attacker@evil.test')))),
+   'linked_account_protected');
+deheled_um_rest_unlink_user(req(array('id' => 50)));
 eq('...and it is refused again afterwards',
    code(deheled_um_rest_update_user(req(array('id' => 50, 'role' => 'editor')))), 'not_managed');
 
@@ -417,6 +452,56 @@ eq('a missing user is not found',
    code(deheled_um_rest_update_user(req(array('id' => 9999, 'role' => 'editor')))), 'not_found');
 
 /* ----------------------------------------------------------- role guard --- */
+
+echo "\n--- an account we created stays fully manageable ---\n";
+reset_site();
+$ours = body(deheled_um_rest_create_user(req(array('email' => 'ours@digitalelementsgroup.com', 'role' => 'editor'))));
+$ours_id = $ours['user']['id'];
+ok('it is marked as created by us', deheled_um_user_was_created_by_us($ours_id));
+eq('its email can be changed',
+   body(deheled_um_rest_update_user(req(array('id' => $ours_id, 'email' => 'ours2@digitalelementsgroup.com'))))['result'],
+   'updated');
+eq('and a password reset is allowed',
+   body(deheled_um_rest_password_reset(req(array('id' => $ours_id))))['result'], 'reset');
+// Setting the same address again is not a change and must not be refused.
+eq('re-sending the same address is a no-op, not a refusal',
+   body(deheled_um_rest_update_user(req(array('id' => $ours_id, 'email' => 'ours2@digitalelementsgroup.com'))))['result'],
+   'skipped');
+
+echo "\n--- code-execution capabilities count as administering the site ---\n";
+// install_plugins alone is arbitrary code execution. A role holding it without
+// manage_options is common on real client sites, and must not be assignable
+// with the ordinary write scope.
+$GLOBALS['__editable_roles']['site_manager'] = array(
+    'name' => 'Site manager',
+    'capabilities' => array('install_plugins' => true, 'edit_posts' => true),
+);
+$GLOBALS['__editable_roles']['file_editor'] = array(
+    'name' => 'File editor', 'capabilities' => array('edit_plugins' => true),
+);
+$GLOBALS['__editable_roles']['theme_switcher'] = array(
+    'name' => 'Theme switcher', 'capabilities' => array('switch_themes' => true),
+);
+$GLOBALS['__editable_roles']['importer'] = array(
+    'name' => 'Importer', 'capabilities' => array('import' => true),
+);
+foreach (array('site_manager', 'file_editor', 'theme_switcher', 'importer') as $slug) {
+    ok("$slug is classified as site administration",
+       deheled_um_role_is_site_admin($GLOBALS['__editable_roles'][$slug]['capabilities']));
+}
+ok('...while an ordinary editor still is not',
+   deheled_um_role_is_site_admin($GLOBALS['__editable_roles']['editor']['capabilities']) === false);
+ok('...and an author still is not',
+   deheled_um_role_is_site_admin($GLOBALS['__editable_roles']['author']['capabilities']) === false);
+
+reset_site(array('users:read', 'users:write'));   // no users:admin
+make_user(array('ID' => 68, 'user_email' => 'g@digitalelementsgroup.com', 'roles' => array('subscriber')), true);
+eq('assigning a code-execution role is refused without users:admin',
+   code(deheled_um_rest_update_user(req(array('id' => 68, 'role' => 'site_manager', 'confirm_admin' => true)))),
+   'scope_denied');
+eq('creating one is refused too',
+   code(deheled_um_rest_create_user(req(array('email' => 'sm@digitalelementsgroup.com', 'role' => 'file_editor')))),
+   'scope_denied');
 
 echo "\n--- roles are whitelisted against this site ---\n";
 reset_site();
