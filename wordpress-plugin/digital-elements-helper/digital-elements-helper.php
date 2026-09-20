@@ -59,9 +59,14 @@ require_once DEHELED_PLUGIN_DIR . 'includes/auth.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/checks.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/security-scan.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/rest.php';
+// User management (de/v2). A separate namespace with its own signed, scoped
+// credential — see includes/um-auth.php for why the license key is not reused.
+require_once DEHELED_PLUGIN_DIR . 'includes/um-auth.php';
+require_once DEHELED_PLUGIN_DIR . 'includes/um-rest.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/license.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/updater.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/admin.php';
+require_once DEHELED_PLUGIN_DIR . 'includes/um-admin.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/analytics.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/llms.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/optimize.php';

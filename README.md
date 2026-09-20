@@ -206,6 +206,13 @@ Access is governed by its own `manageWpUsers` permission — separate from
 by anyone with the `admin` role plus an explicit allow-list stored in
 `app_settings.wp_user_managers`.
 
+Connected websites are enrolled one at a time: the dashboard issues a one-time
+code, someone with access to that site's WP admin pastes it into DE Monitoring,
+and the site redeems it for its own scoped credential. User-management requests
+are signed per request and are **not** authorized by the monitoring license key,
+so a leaked license key can never create an account. Set `USER_MGMT_ENC_KEY` to
+enable the feature; without it teams and staff still work.
+
 The roster of teams and staff is seeded by a migration and fully editable
 afterwards. Database changes for this feature live in `db/migrations/`, applied
 once each at boot by `src/migrate.js` and recorded in `schema_migrations`;
@@ -235,6 +242,11 @@ tests/usermgmt-policy.test.mjs      user management: the permission model and
                                     restriction, and audit redaction
 tests/usermgmt-migrations.test.mjs  migration ordering, nothing destructive in
                                     them, and the seeded roster
+tests/usermgmt-signing.test.mjs     request signing, credential encryption, the
+                                    SSRF guard, capability gating
+tests/usermgmt-auth.test.php        the plugin's side of the same signing
+                                    contract: tampering, clock window, replay,
+                                    scopes, rate limiting
 ```
 
 ### Live check against a real WordPress install
@@ -256,6 +268,17 @@ behave against a real media library. Read-only apart from the plugin's own resul
 cache, which it saves and restores.
 
 Run it after any plugin change, and extend it as new optimizations land.
+
+The user-management API has its own equivalent, covering REST route
+registration, the signed-request guards against the real options API, and the
+capabilities payload:
+
+```bash
+php scripts/live-usermgmt-check.php D:/laragon/www/wordpresstester
+```
+
+It refuses to run against any host that isn't local, restores the site's
+options afterwards, and creates, changes or deletes no WordPress user.
 
 ## Project layout
 
