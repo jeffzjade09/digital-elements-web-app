@@ -1019,14 +1019,14 @@ function wpuRenderReview() {
 
     <div class="wpu-note" style="margin-top:12px">
       Checked ${s.people} ${s.people === 1 ? "person" : "people"} across ${s.sites}
-      website${s.sites === 1 ? "" : "s"}. Nothing has been changed — this is a preview.
+      website${s.sites === 1 ? "" : "s"}. Nothing has been changed yet — you’ll confirm first.
     </div>`;
 
   if (actions) {
     actions.innerHTML = `
       <span class="wpu-msg" id="wpuModalMsg" style="margin-right:auto"></span>
       <button class="btn-ghost" onclick="wpuOpenSitePicker()">Back</button>
-      <button class="btn-primary" disabled title="Applying assignments arrives in the next phase">
+      <button class="btn-primary" ${s.actionable ? "" : "disabled"} onclick="wpuConfirmApply()">
         Apply ${s.actionable} change${s.actionable === 1 ? "" : "s"}
       </button>`;
   }
@@ -1038,6 +1038,269 @@ function wpuSetRoleOverride(websiteId, role) {
   if (role) WPU_ASSIGN.roleOverrides[websiteId] = role;
   else delete WPU_ASSIGN.roleOverrides[websiteId];
   wpuReview();
+}
+
+/* ------------------------------------------------------ confirm & apply -- */
+
+/**
+ * The confirmation step between the review table and actually changing client
+ * sites.
+ *
+ * Each checkbox is a separate, explicit acknowledgement — no single "I agree"
+ * covering several unrelated risks — and none of them is pre-ticked. The server
+ * and the plugin enforce the same rules independently; these exist so an
+ * administrator sees what they are agreeing to, not as the mechanism.
+ */
+function wpuConfirmApply() {
+  const pf = WPU_ASSIGN.preflight;
+  if (!pf) return;
+  const s = pf.summary;
+
+  const needsAdmin = s.needsAdminConfirmation > 0;
+  const adminRows = pf.rows.filter((r) => r.needsAdminConfirmation);
+  const demotions = pf.rows.filter(
+    (r) => r.action === "update" && (r.currentRoles || []).includes("administrator")
+  );
+  const external = pf.rows.filter((r) => !r.staffEmail.endsWith("@digitalelementsgroup.com"));
+  const externalPeople = [...new Set(external.map((r) => r.staffEmail))];
+  const siteCount = s.sites;
+
+  wpuOpenModal({
+    eyebrow: "Website assignment",
+    title: `Apply ${s.actionable} change${s.actionable === 1 ? "" : "s"}?`,
+    body: `
+      <div class="wpu-note" style="margin-bottom:16px">
+        This will create or update accounts on <strong>${siteCount}</strong>
+        website${siteCount === 1 ? "" : "s"}. ${s.blocked ? `${s.blocked} blocked
+        row${s.blocked === 1 ? "" : "s"} and ` : ""}${s.link_required} account${s.link_required === 1 ? "" : "s"}
+        needing a link will be left alone.
+      </div>
+
+      ${needsAdmin ? `
+        <div class="wpu-danger">
+          <strong>${adminRows.length} assignment${adminRows.length === 1 ? "" : "s"} would grant a role that can administer the website.</strong>
+          <div style="margin-top:7px">${adminRows.slice(0, 5).map((r) =>
+            `${esc(r.staffLabel)} → ${esc(r.requestedRole)} on ${esc(r.websiteName)}`).join("<br />")}
+            ${adminRows.length > 5 ? `<br />…and ${adminRows.length - 5} more` : ""}</div>
+        </div>
+        <label class="wpu-check" style="margin-bottom:14px">
+          <input type="checkbox" id="wpu-c-admin" />
+          <span>I confirm these people should be able to administer those websites.</span>
+        </label>` : ""}
+
+      ${demotions.length ? `
+        <div class="wpu-warnbox">
+          <strong>${demotions.length} existing administrator${demotions.length === 1 ? "" : "s"} would have their role changed.</strong>
+          A website's last administrator is never changed — those are refused by the
+          website itself.
+        </div>
+        <label class="wpu-check" style="margin-bottom:14px">
+          <input type="checkbox" id="wpu-c-demote" />
+          <span>I confirm these administrators should have their role changed.</span>
+        </label>` : ""}
+
+      ${externalPeople.length ? `
+        <div class="wpu-warnbox">
+          <strong>${externalPeople.length} address${externalPeople.length === 1 ? " is" : "es are"} outside @digitalelementsgroup.com.</strong>
+          <div style="margin-top:7px">${externalPeople.slice(0, 5).map(esc).join("<br />")}</div>
+        </div>
+        <label class="wpu-check" style="margin-bottom:14px">
+          <input type="checkbox" id="wpu-c-domain" />
+          <span>I confirm these external addresses should have accounts on client websites. This is recorded in the activity log.</span>
+        </label>` : ""}
+
+      <div class="wpu-note">
+        Passwords are never shown or sent by us — each new account gets WordPress’s
+        own set-password email. Nothing is deleted by this action.
+      </div>`,
+    actions: `<button class="btn-ghost" onclick="wpuRenderReviewModal()">Back</button>
+              <button class="btn-primary" onclick="wpuApply()">Apply changes</button>`,
+  });
+}
+
+// Re-opens the review without re-running the preflight, for the Back button.
+function wpuRenderReviewModal() {
+  wpuOpenModal({
+    eyebrow: "Website assignment",
+    title: "Review",
+    body: '<div class="wpu-empty">…</div>',
+    actions: "",
+  });
+  wpuRenderReview();
+}
+
+async function wpuApply() {
+  const need = (id) => {
+    const el = document.getElementById(id);
+    return el ? el.checked : true;
+  };
+  if (!need("wpu-c-admin") || !need("wpu-c-demote") || !need("wpu-c-domain")) {
+    return wpuModalError("Tick every confirmation to continue.");
+  }
+
+  const domainEl = document.getElementById("wpu-c-domain");
+  const adminEl = document.getElementById("wpu-c-admin");
+
+  try {
+    const job = await wpuApi("/assign", {
+      method: "POST",
+      body: {
+        staffUserIds: WPU_ASSIGN.teamId ? [] : WPU_ASSIGN.staffIds,
+        teamId: WPU_ASSIGN.teamId,
+        websiteIds: [...WPU_ASSIGN.selected],
+        roleOverrides: WPU_ASSIGN.roleOverrides,
+        confirmAdmin: !!(adminEl && adminEl.checked),
+        overrideDomain: !!(domainEl && domainEl.checked),
+      },
+    });
+    wpuWatchJob(job.jobId);
+  } catch (err) {
+    wpuModalError(err.message);
+  }
+}
+
+/* -------------------------------------------------------------- progress -- */
+
+const WPU_JOB = { id: null, timer: null, data: null };
+
+const WPU_OP_STATE = {
+  pending:     { label: "Pending",    cls: "none" },
+  processing:  { label: "Working…",   cls: "warn" },
+  synced:      { label: "Created",    cls: "ok" },
+  linked:      { label: "Linked",     cls: "ok" },
+  updated:     { label: "Updated",    cls: "ok" },
+  skipped:     { label: "No change",  cls: "none" },
+  removed:     { label: "Removed",    cls: "ok" },
+  failed:      { label: "Failed",     cls: "bad" },
+  interrupted: { label: "Interrupted", cls: "warn" },
+};
+
+/**
+ * Polls a running job.
+ *
+ * 1.5 seconds is fast enough to feel live and slow enough that a job across a
+ * dozen sites doesn't generate more requests than the work itself. Polling
+ * stops the moment the job reports done — the server decides that, not a
+ * client-side guess about how long it should take.
+ */
+function wpuWatchJob(jobId) {
+  WPU_JOB.id = jobId;
+  if (WPU_JOB.timer) clearInterval(WPU_JOB.timer);
+
+  const tick = async () => {
+    try {
+      const res = await wpuApi(`/jobs/${jobId}`);
+      WPU_JOB.data = res.job;
+      wpuRenderProgress();
+      if (res.job.done && WPU_JOB.timer) {
+        clearInterval(WPU_JOB.timer);
+        WPU_JOB.timer = null;
+      }
+    } catch (err) {
+      if (WPU_JOB.timer) { clearInterval(WPU_JOB.timer); WPU_JOB.timer = null; }
+      const panel = document.querySelector("#wpuModal .modal-form");
+      if (panel) panel.innerHTML = `<div class="wpu-danger">${esc(err.message)}</div>`;
+    }
+  };
+
+  wpuOpenModal({
+    eyebrow: "Website assignment",
+    title: "Applying changes",
+    body: '<div class="wpu-empty">Starting…</div>',
+    actions: '<button class="btn-ghost" onclick="wpuCloseJob()">Close</button>',
+  });
+  tick();
+  WPU_JOB.timer = setInterval(tick, 1500);
+}
+
+function wpuCloseJob() {
+  if (WPU_JOB.timer) { clearInterval(WPU_JOB.timer); WPU_JOB.timer = null; }
+  wpuCloseModal();
+  if (WPU.tab === "websites") wpuRenderWebsites(true);
+}
+
+function wpuRenderProgress() {
+  const panel = document.querySelector("#wpuModal .modal-form");
+  const actionsEl = document.querySelector("#wpuModal .modal-actions");
+  const job = WPU_JOB.data;
+  if (!panel || !job) return;
+
+  const ops = job.operations;
+  const done = ops.filter((o) => !["pending", "processing"].includes(o.status)).length;
+  const pct = ops.length ? Math.round((done / ops.length) * 100) : 0;
+  const failed = ops.filter((o) => ["failed", "interrupted"].includes(o.status));
+  const warned = ops.filter((o) => (o.warnings || []).length);
+
+  const counts = Object.entries(job.counts).map(([k, n]) => {
+    const st = WPU_OP_STATE[k] || WPU_OP_STATE.pending;
+    return `<span class="wpu-chip ${esc(st.cls)}">${n} ${esc(st.label.toLowerCase().replace("…", ""))}</span>`;
+  }).join("");
+
+  const rows = ops.map((o) => {
+    const st = WPU_OP_STATE[o.status] || WPU_OP_STATE.pending;
+    return `
+      <tr>
+        <td data-label="Person"><span class="wpu-name">${esc(o.staffLabel || o.staffEmail || "—")}</span></td>
+        <td data-label="Website">${esc(o.websiteName || "—")}</td>
+        <td data-label="Role"><span class="wpu-chip role">${esc(o.requestedRole || "—")}</span></td>
+        <td data-label="Status">
+          <span class="wpu-chip ${esc(st.cls)}">${esc(st.label)}</span>
+          ${o.replayed ? ' <span class="wpu-chip none" title="This had already been applied; the website replayed its earlier result">already applied</span>' : ""}
+          ${o.attempt > 1 ? ` <span class="wpu-chip none">attempt ${o.attempt}</span>` : ""}
+          ${o.error ? `<div class="wpu-blocker">${esc(o.error)}</div>` : ""}
+          ${(o.warnings || []).map((w) => `<div class="wpu-warn-line">${esc(w.message)}</div>`).join("")}
+        </td>
+      </tr>`;
+  }).join("");
+
+  panel.innerHTML = `
+    <div class="wpu-progress"><div class="wpu-progress-bar" style="width:${pct}%"></div></div>
+    <div class="wpu-bar" style="margin-top:12px">
+      <span class="wpu-chip">${done} of ${ops.length} done</span>
+      ${counts}
+    </div>
+
+    ${warned.length ? `<div class="wpu-warnbox">
+      <strong>${warned.length} account${warned.length === 1 ? "" : "s"} created, but the website couldn’t send the set-password email.</strong>
+      Those people can use the Lost Password link instead. We never send or display passwords.
+    </div>` : ""}
+
+    <div class="wpu-card">
+      <table class="wpu-table">
+        <thead><tr><th>Person</th><th>Website</th><th>Role</th><th>Status</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+
+    ${job.done ? `<div class="wpu-note" style="margin-top:12px">
+      Finished — ${esc(job.status)}. Each website was handled independently, so a failure
+      on one didn’t affect the others.
+    </div>` : ""}`;
+
+  if (actionsEl) {
+    actionsEl.innerHTML = `
+      <span class="wpu-msg" id="wpuModalMsg" style="margin-right:auto"></span>
+      ${failed.length && job.done
+        ? `<button class="btn" onclick="wpuRetryJob()">Retry failed (${failed.length})</button>`
+        : ""}
+      <button class="btn-primary" onclick="wpuCloseJob()">${job.done ? "Done" : "Run in background"}</button>`;
+  }
+}
+
+/**
+ * Retries only the failed operations.
+ *
+ * Safe to press repeatedly: each retry reuses its operation's original
+ * idempotency key, so anything that actually did apply before the failure is
+ * replayed by the website rather than applied a second time.
+ */
+async function wpuRetryJob() {
+  try {
+    await wpuApi(`/jobs/${WPU_JOB.id}/retry`, { method: "POST" });
+    wpuWatchJob(WPU_JOB.id);
+  } catch (err) {
+    wpuModalError(err.message);
+  }
 }
 
 /* -------------------------------------------------------------------- audit */

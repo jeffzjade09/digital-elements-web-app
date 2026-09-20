@@ -33,6 +33,7 @@ import { loadGrants, startGrantRefresh } from "./usermgmt/grants.js";
 import wpUsersRouter from "./routes/wpusers.js";
 import { redeemEnrollmentCode, isConfigured as isUserMgmtConfigured } from "./usermgmt/credentials.js";
 import { record as recordAudit } from "./usermgmt/audit.js";
+import { sweepInterruptedOperations } from "./usermgmt/sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, "..", "public");
@@ -684,6 +685,11 @@ bootstrap()
     await runMigrations();
     await loadGrants();      // who holds manageWpUsers, beyond the admin role
     startGrantRefresh();     // pick up changes without a restart
+    // An operation still "processing" after a restart is a casualty of that
+    // restart, not work in progress. Mark it interrupted so it shows as
+    // retryable instead of leaving a job that never finishes.
+    try { await sweepInterruptedOperations(); }
+    catch (err) { console.error("[server] Could not sweep interrupted sync operations:", err.message); }
     try { applyStoredSettings(settings, await getAppSettings()); } catch (err) { console.error("[server] Could not load stored settings:", err.message); }
     await seedRequestMetrics(); // restore request-metric buckets from the DB
     // Cold start = the DATABASE has no sweep history (durable across redeploys),

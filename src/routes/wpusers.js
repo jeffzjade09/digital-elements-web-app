@@ -20,6 +20,7 @@ import * as credentials from "../usermgmt/credentials.js";
 import { getCapabilities, getCapabilitiesForAll, REQUIRED_API_VERSION } from "../usermgmt/capabilities.js";
 import { getSiteRoles } from "../usermgmt/roles.js";
 import { runPreflight } from "../usermgmt/preflight.js";
+import { startAssignment, startRemoval, getJob, retryJob } from "../usermgmt/sync.js";
 import { getWebsites, getWebsiteSite } from "../db.js";
 
 export const router = express.Router();
@@ -314,6 +315,119 @@ router.post("/preflight", asyncRoute(async (req, res) => {
 
   try {
     const result = await runPreflight({ staffUserIds, teamId: b.teamId || null, websiteIds, roleOverrides });
+    res.json({ ok: true, ...result });
+  } catch (err) { return fail(res, err); }
+}));
+
+// ---------------------------------------------------------------- apply ----
+/**
+ * Applies a reviewed plan. Returns as soon as the job exists; the work
+ * continues in the background and the UI polls /jobs/:id.
+ *
+ * Confirmations are required HERE, not only in the UI. The plugin enforces its
+ * own guards independently, so a caller that skips this one still can't assign
+ * an administering role — but refusing early gives a clear message instead of a
+ * wall of per-site failures.
+ */
+router.post("/assign", asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  const staffUserIds = Array.isArray(b.staffUserIds) ? b.staffUserIds.filter(Boolean) : [];
+  const websiteIds = Array.isArray(b.websiteIds) ? b.websiteIds.filter(Boolean) : [];
+
+  if (!staffUserIds.length && !b.teamId) {
+    return res.status(400).json({ ok: false, error: "Select at least one person, or a team." });
+  }
+  if (!websiteIds.length) {
+    return res.status(400).json({ ok: false, error: "Select at least one website." });
+  }
+
+  try {
+    const job = await startAssignment({
+      staffUserIds,
+      teamId: b.teamId || null,
+      websiteIds,
+      roleOverrides: b.roleOverrides && typeof b.roleOverrides === "object" ? b.roleOverrides : {},
+      confirmations: { admin: b.confirmAdmin === true },
+      overrideDomain: b.overrideDomain === true,
+    }, audit.actorFrom(req));
+
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "wpusers.assign_started", entityType: "sync_job", entityId: job.jobId,
+      after: {
+        people: job.people, sites: job.sites, operations: job.operations,
+        confirmAdmin: b.confirmAdmin === true, overrideDomain: b.overrideDomain === true,
+      },
+    });
+    res.json({ ok: true, ...job });
+  } catch (err) { return fail(res, err); }
+}));
+
+/**
+ * Stops managing people on websites.
+ *
+ * "Remove" means unlink: the WordPress account keeps its role, its content and
+ * its access, and we simply stop managing it. Deleting the account needs the
+ * content-ownership checks from the next phase, and is deliberately not
+ * offered here — that is how content gets orphaned.
+ */
+router.post("/remove", asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  const staffUserIds = Array.isArray(b.staffUserIds) ? b.staffUserIds.filter(Boolean) : [];
+  const websiteIds = Array.isArray(b.websiteIds) ? b.websiteIds.filter(Boolean) : [];
+
+  if (!staffUserIds.length && !b.teamId) {
+    return res.status(400).json({ ok: false, error: "Select at least one person, or a team." });
+  }
+  if (!websiteIds.length) {
+    return res.status(400).json({ ok: false, error: "Select at least one website." });
+  }
+  if (b.deleteAccounts) {
+    return res.status(400).json({
+      ok: false, code: "not_supported",
+      error: "Deleting WordPress accounts isn't available yet — it needs the content-ownership checks. This removes our management of the account only.",
+    });
+  }
+
+  try {
+    const job = await startRemoval({ staffUserIds, teamId: b.teamId || null, websiteIds }, audit.actorFrom(req));
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "wpusers.remove_started", entityType: "sync_job", entityId: job.jobId,
+      after: { people: job.people, sites: job.sites, operations: job.operations },
+    });
+    res.json({ ok: true, ...job });
+  } catch (err) { return fail(res, err); }
+}));
+
+// Polled by the progress view. Cheap enough for a 1.5s cadence: one row per
+// operation, already indexed by job.
+router.get("/jobs/:id", asyncRoute(async (req, res) => {
+  const job = await getJob(req.params.id);
+  if (!job) return res.status(404).json({ ok: false, error: "That job no longer exists." });
+  res.json({ ok: true, job });
+}));
+
+/**
+ * Retries a job's failed operations, and only those.
+ *
+ * Successful ones are never re-run, and each retry reuses its original
+ * idempotency key, so anything that did apply before the failure is replayed by
+ * the site rather than applied twice.
+ */
+router.post("/jobs/:id/retry", asyncRoute(async (req, res) => {
+  const job = await getJob(req.params.id);
+  if (!job) return res.status(404).json({ ok: false, error: "That job no longer exists." });
+  try {
+    const result = await retryJob(req.params.id, audit.actorFrom(req));
+    if (!result.retried) {
+      return res.status(400).json({ ok: false, error: "Nothing in this job failed, so there's nothing to retry." });
+    }
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "wpusers.retry", entityType: "sync_job", entityId: req.params.id,
+      after: { retried: result.retried },
+    });
     res.json({ ok: true, ...result });
   } catch (err) { return fail(res, err); }
 }));

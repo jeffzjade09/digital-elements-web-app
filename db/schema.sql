@@ -185,3 +185,10 @@ create table if not exists wp_role_cache (
   primary key (website_id, slug)
 );
 -- Also added to `websites` by 004: um_default_role, um_roles_fetched_at
+
+-- Website assignments and sync jobs (migration 005). Operations live here
+-- rather than in memory so a process restart mid-job is recoverable: anything
+-- left 'processing' is swept to 'interrupted' on boot and can be retried.
+-- website_user_assignments  the intended state, one row per person per site
+-- user_sync_jobs            one administrator action
+-- user_sync_operations      one person on one site — the retry and idempotency unit

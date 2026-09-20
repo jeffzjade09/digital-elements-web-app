@@ -34,6 +34,29 @@ feature ships.
   WP_User object with fields removed — so a future WordPress release cannot
   silently widen what is disclosed. No password hash, no activation key, no
   session tokens, and `_de_managed` is the only user meta read or reported.
+- Write endpoints, all requiring the `users:write` scope: `POST de/v2/users`,
+  `PATCH de/v2/users/{id}`, `POST de/v2/users/{id}/link`, `/unlink` and
+  `/password-reset`. Every guard is enforced in PHP regardless of what the
+  dashboard sent:
+  - accounts without `_de_managed` are refused (`not_managed`); `/link` is the
+    single route allowed to touch one, and is an explicit action;
+  - target roles are whitelisted against `get_editable_roles()`;
+  - a role that can administer the site needs the `users:admin` scope AND an
+    explicit `confirm_admin` — neither substitutes for the other;
+  - the site's last administrator can never be demoted or unlinked.
+- Passwords are generated with `wp_generate_password(32, true, true)`, handed to
+  WordPress and never referenced again: not returned, not logged, not stored by
+  us. If the set-password email fails, that is a WARNING on a successful create.
+  There is no condition under which a password is disclosed instead.
+- Mail delivery is now judged from `pre_wp_mail`, `wp_mail_succeeded` and
+  `wp_mail_failed` rather than from whether the `wp_mail` filter ran. wp_mail()
+  applies that filter BEFORE `pre_wp_mail` can short-circuit, so a plugin that
+  silently drops the message previously looked like a successful send.
+- Every write requires an `Idempotency-Key`. The first result for a key is
+  stored and replayed verbatim with `X-DE-Idempotent-Replay: 1`; an in-flight
+  claim via `add_option()` means two concurrent duplicates can't both win. Only
+  successful results are cached, so a corrected retry of a rejected request
+  still works.
 - Roles report two elevation tiers: `is_site_admin` (manage_options,
   promote_users, edit_users, delete_users) and the broader `is_admin_like`
   which also counts `unfiltered_html`. WordPress grants unfiltered_html to

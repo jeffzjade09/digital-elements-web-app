@@ -8,10 +8,9 @@ job is to provide the secure API the app calls — there is no user-management
 screen inside the plugin.
 
 > **Status.** This document describes the whole feature; the sections marked
-> _(later phase)_ are not built yet. What exists today is the app-side roster,
-> the secure channel to each site, and the read path: each site's real roles,
-> existing-account lookup, and the preflight/review screen. **Nothing writes to
-> a WordPress site yet** — applying a reviewed plan is the next phase.
+> _(later phase)_ are not built yet. Creating, updating and linking accounts now
+> works end to end. **Deleting a WordPress account is not available yet** — it
+> needs the content-ownership checks from the next phase.
 
 ## Concepts
 
@@ -80,12 +79,16 @@ These hold across every phase:
 - **A site opts in.** User management cannot be switched on remotely. The site
   redeems a one-time code that someone with access to its WP admin pasted in,
   and it can disconnect at any time.
-- **Client accounts are untouchable.** _(later phase)_ Only accounts this tool
-  created — or that an administrator deliberately linked — carry the
-  managed-by-Digital-Elements flag, and only those can be modified.
-- **No passwords, ever.** _(later phase)_ New accounts get a generated password
-  that is never returned, displayed, logged or stored; WordPress sends its own
-  set-password email.
+- **Client accounts are untouchable.** Only accounts this tool created — or that
+  an administrator deliberately linked — carry `_de_managed`, and every mutating
+  route refuses anything without it. `/link` is the single exception and is how
+  an account becomes managed in the first place.
+- **The last administrator is never stranded.** Demoting or unlinking a site's
+  only administrator is refused by the site itself.
+- **No passwords, ever.** New accounts get a generated password that is never
+  returned, displayed, logged or stored; WordPress sends its own set-password
+  email. If that email fails, it is a **warning on a successful create** — there
+  is no condition under which a password is disclosed instead.
 - **Deleting a team deletes nobody.** The app asks what happens to its members
   and never touches a WordPress account as a side effect.
 - **Removing someone from the roster** removes them from this app only. Their
@@ -107,6 +110,7 @@ src/usermgmt/
   wpClient.js             signed calls to a site, SSRF guard, error mapping
   capabilities.js         per-site probe + cache, readiness states
   preflight.js            predicts every (person × website) outcome; writes nothing
+  sync.js                 planner, bounded executor, retries, job recovery
 src/routes/wpusers.js     thin Express layer over the modules above
 public/wpusers.{js,css}   the Settings → WP Users interface
 
@@ -114,6 +118,7 @@ wordpress-plugin/digital-elements-helper/includes/
   um-auth.php             signature verification, nonces, scopes, idempotency
   um-rest.php             the de/v2 namespace and the capabilities probe
   um-users.php            read endpoints: roles, users, existence lookup
+  um-write.php            create / update / link / unlink / password reset + guards
   um-admin.php            the site's own connect / permissions / disconnect panel
 ```
 
@@ -232,6 +237,7 @@ information, never anything about a user.
 | Variable | Purpose |
 |---|---|
 | `USER_MGMT_ENC_KEY` | 32 bytes (base64 or hex) encrypting stored credentials. Without it, teams and staff work and the Websites tab reports the feature unconfigured. **Losing it means re-enrolling every site.** |
+| `USER_SYNC_CONCURRENCY` | How many websites a bulk run touches at once. Default 4, capped at 16. |
 | `UM_ALLOW_LOCAL_SITES` | `1` to allow calls to localhost/`*.test`. Off by default so a website URL can't make the server call its own network. Needed for local WordPress testing. |
 
 ### Where outbound requests may go
@@ -275,6 +281,10 @@ mount point in `src/server.js`.
 | GET | `/websites/:id/capabilities` | One site's probe result |
 | GET | `/websites/:id/roles` | That site's real roles (`?refresh=1` re-asks) |
 | POST | `/preflight` | Predicts every (person × website) outcome. Writes nothing |
+| POST | `/assign` | Applies a reviewed plan. Returns `{ jobId }` |
+| POST | `/remove` | Stops managing accounts (unlink). Returns `{ jobId }` |
+| GET | `/jobs/:id` | Job progress, polled by the UI |
+| POST | `/jobs/:id/retry` | Retries a job's **failed** operations only |
 | POST | `/websites/:id/enrollment-code` | Issue a one-time connect code |
 | POST | `/websites/:id/rotate-credential` | Revoke and issue a new code |
 | POST | `/websites/:id/revoke-credential` | Disconnect a site |
@@ -321,6 +331,46 @@ Three details matter more than the rest:
 The predicted actions use the same vocabulary the sync phase reports back, so
 the review screen and the results screen line up.
 
+## Applying a plan
+
+### What makes "Retry failed" safe to press
+
+Every operation carries an idempotency key derived from
+`sha256(JSON([jobId, websiteId, staffUserId, action]))` — **stable across every
+retry of the same unit of work**. A retry presents the same key, so the site
+replays its stored result rather than applying the change a second time. JSON
+rather than a joined string because joining on a separator lets `("a:b","c")`
+and `("a","b:c")` collide, and a key two operations can share is the one thing
+this must never produce.
+
+Only failed operations are retried. Successful ones are never re-run.
+
+### Retry policy
+
+Automatic retry happens **once**, and only for transport failures: `timeout`,
+`unreachable`, `site_error`, `rate_limited`. A 4xx is the site refusing the
+request — retrying it unchanged just fails again, and for
+`role_requires_confirmation` it would mean hammering past a deliberate guard.
+
+### Bounded concurrency
+
+`USER_SYNC_CONCURRENCY` (default 4) sites in flight, 20s per-site timeout. Work
+is pulled from a shared cursor rather than chunked, so one very slow site
+doesn't leave the other workers idle.
+
+### Surviving a restart
+
+Operations live in Postgres, not memory. On boot, anything still `processing`
+for more than 10 minutes is marked `interrupted` — visible and retryable —
+instead of leaving a job that never finishes and a spinner that never stops.
+
+### "Remove" means unlink
+
+`POST /remove` clears `_de_managed`. **The WordPress account keeps its role, its
+content and its access** — we simply stop managing it. Deleting an account needs
+the content-ownership checks from the next phase; offering deletion without them
+is how content gets orphaned, so the route refuses `deleteAccounts` outright.
+
 ## Roadmap
 
 | Phase | Contents |
@@ -328,7 +378,7 @@ the review screen and the results screen line up.
 | 0–1 ✅ | Migration runner, `manageWpUsers`, teams and staff, activity log, UI |
 | 2 ✅ | Scoped per-site credential, HMAC request signing, `de/v2/capabilities`, enrollment, plugin version compatibility |
 | 3 ✅ | Reading roles and users from sites, role cache, preflight review |
-| 4 | Create / update / link / role change, sync jobs, bulk and whole-team assignment, retries |
+| 4 ✅ | Create / update / link / role change, sync jobs, bulk and whole-team assignment, retries |
 | 5 | Content ownership, reassignment, guarded deletion |
 | 6–7 | Sync dashboard, polish, plugin 2.6.0 release and rollout |
 
@@ -352,6 +402,10 @@ protection, scopes and rate limiting.
 role classification.
 `tests/usermgmt-users.test.php` covers the read routes' scope enforcement and,
 above all, that a user leaves a site carrying only the fields we chose.
+`tests/usermgmt-write.test.php` covers every write guard independently, and that
+no generated password reaches a response under any condition.
+`tests/usermgmt-sync.test.mjs` covers the idempotency key, the retry rule and
+the bounded executor.
 
 All of them run without a database or a WordPress install.
 
