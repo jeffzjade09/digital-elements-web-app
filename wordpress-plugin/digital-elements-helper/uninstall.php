@@ -34,6 +34,18 @@ delete_option('deheled_um_secret');
 delete_option('deheled_um_scopes');
 delete_option('deheled_um_enrolled_at');
 
+/**
+ * Our markers on WordPress users.
+ *
+ * These are removed so a site that deletes this plugin is left with ordinary,
+ * unmarked accounts — but the ACCOUNTS themselves are untouched. Uninstalling
+ * a plugin must never delete a site's users, and nothing here does.
+ */
+delete_metadata('user', 0, '_de_managed', '', true);
+delete_metadata('user', 0, '_de_managed_at', '', true);
+delete_metadata('user', 0, '_de_linked', '', true);
+delete_metadata('user', 0, '_de_created', '', true);
+
 // Replay-protection nonces and idempotency records are short-lived derived
 // data; sweep whatever is still lying around.
 global $wpdb;

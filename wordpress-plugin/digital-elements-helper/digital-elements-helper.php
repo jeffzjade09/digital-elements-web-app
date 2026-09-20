@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Digital Elements Helper Plugin
- * Description: Connects this site to the Digital Elements monitoring dashboard. Adds a DE Monitoring admin panel showing HTTPS, SSL, Cloudflare, CTM, Google Tag, PageSpeed, update status, security scan and history, plus a secure, read-only endpoint the central dashboard reads. It cannot modify the site, access content, or run updates.
- * Version:     2.5.0
+ * Description: Connects this site to the Digital Elements monitoring dashboard. Adds a DE Monitoring admin panel showing HTTPS, SSL, Cloudflare, CTM, Google Tag, PageSpeed, update status, security scan and history, plus a secure endpoint the central dashboard reads. Optionally, and only if an administrator of this site connects it, Digital Elements can also manage agency staff accounts here: it can never touch accounts it did not create or that you did not deliberately link, and deleting users or granting Administrator stay switched off unless you enable them.
+ * Version:     2.6.0
  * Author:      Digital Elements Group
  * Author URI:  https://digitalelementsgroup.com/
  * Plugin URI:  https://digitalelementsgroup.com/
@@ -33,7 +33,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('DEHELED_VERSION', '2.5.0');
+define('DEHELED_VERSION', '2.6.0');
 define('DEHELED_PLUGIN_FILE', __FILE__);
 define('DEHELED_BASENAME', plugin_basename(__FILE__));
 define('DEHELED_PLUGIN_DIR', plugin_dir_path(__FILE__));
