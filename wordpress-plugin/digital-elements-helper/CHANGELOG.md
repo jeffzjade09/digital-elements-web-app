@@ -1,5 +1,32 @@
 # Changelog — Digital Elements Helper Plugin
 
+## Unreleased — user management (de/v2)
+
+Not yet released. The version header deliberately stays at 2.5.0 while this is
+built, so `/api/plugin/manifest` never offers client sites an update to a
+half-finished feature. It is bumped once, in the final phase, when the whole
+feature ships.
+
+- New `de/v2` REST namespace for centralized user management, separate from
+  `wpmonitor/v1`. Monitoring is untouched: sites that never update keep working
+  exactly as they do today.
+- New `de/v2/capabilities` endpoint reporting the plugin version, the contract
+  revision, which features this build implements, and whether the site is
+  connected. The dashboard probes this before any user operation, so a site on
+  an older plugin is shown as "update required" instead of failing opaquely
+  part-way through a bulk run.
+- User-management requests are NOT authorized by the license key. Each site
+  gets a separate, scoped credential and every request is signed (HMAC-SHA256
+  over the method, route, query, timestamp, nonce, idempotency key and body),
+  so a captured request can't be replayed, retargeted or edited in flight.
+- DE Monitoring gains a "User management" section: connect the site by pasting
+  a one-time code, choose locally whether the dashboard may delete users or
+  grant Administrator (both OFF by default), and disconnect at any time. The
+  site always initiates the connection — user management cannot be switched on
+  remotely.
+- Deleting the plugin now removes the user-management credential, unlike the
+  license key which is deliberately kept.
+
 ## 2.5.0
 - Scan images now keeps a short history of past scans (totals and counts only —
   no per-file data), so the dashboard can show what changed since last time.

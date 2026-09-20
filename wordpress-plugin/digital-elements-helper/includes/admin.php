@@ -203,6 +203,14 @@ function deheled_render_panel() {
         </form>
       </div>
 
+      <?php
+        /**
+         * User-management connection panel (includes/um-admin.php).
+         * A hook rather than inline markup so this file stays about monitoring.
+         */
+        do_action('deheled_after_license_panel');
+      ?>
+
       <details class="deheled-settings">
         <summary>PageSpeed API key <?php echo $key_set ? '· set ✓' : '· not set'; ?></summary>
         <?php if (defined('WPMONITOR_PSI_KEY') && WPMONITOR_PSI_KEY): ?>

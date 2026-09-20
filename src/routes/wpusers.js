@@ -16,6 +16,9 @@ import * as audit from "../usermgmt/audit.js";
 import { CORE_ROLES } from "../usermgmt/roles.js";
 import { wpUserManagers, setWpUserManagers } from "../usermgmt/grants.js";
 import { requirePerm } from "../auth.js";
+import * as credentials from "../usermgmt/credentials.js";
+import { getCapabilities, getCapabilitiesForAll, REQUIRED_API_VERSION } from "../usermgmt/capabilities.js";
+import { getWebsites, getWebsiteSite } from "../db.js";
 
 export const router = express.Router();
 
@@ -184,6 +187,82 @@ router.post("/users/move-team", asyncRoute(async (req, res) => {
     });
     res.json({ ok: true, moved: moved.length, users: await staff.listStaff({}) });
   } catch (err) { return fail(res, err); }
+}));
+
+// ------------------------------------------------------------------ websites
+// Which connected sites can be used for user management, and why not when they
+// can't. Every screen that offers a site to select reads this, so "needs a
+// plugin update" and "needs enrolling" are shown BEFORE anything is submitted
+// rather than discovered as a failure halfway through a bulk run.
+router.get("/websites", asyncRoute(async (req, res) => {
+  if (!credentials.isConfigured()) {
+    return res.json({ ok: true, configured: false, websites: [], requiredApiVersion: REQUIRED_API_VERSION });
+  }
+  const sites = await getWebsites();
+  const force = req.query.refresh === "1";
+  const caps = await getCapabilitiesForAll(sites, { force });
+  res.json({ ok: true, configured: true, requiredApiVersion: REQUIRED_API_VERSION, websites: caps });
+}));
+
+router.get("/websites/:id/capabilities", asyncRoute(async (req, res) => {
+  const site = await getWebsiteSite(req.params.id);
+  if (!site) return res.status(404).json({ ok: false, error: "Unknown website." });
+  res.json({ ok: true, capabilities: await getCapabilities(site, { force: req.query.refresh === "1" }) });
+}));
+
+/**
+ * Issues a one-time enrollment code for a site.
+ *
+ * The code is returned once, to be shown to the administrator who will paste it
+ * into that site's DE Monitoring panel. Issuing a code grants nothing on its
+ * own — the site must also present its own license key to redeem it.
+ */
+router.post("/websites/:id/enrollment-code", asyncRoute(async (req, res) => {
+  const site = await getWebsiteSite(req.params.id);
+  if (!site) return res.status(404).json({ ok: false, error: "Unknown website." });
+  try {
+    const issued = await credentials.issueEnrollmentCode(site.id, req.user.id);
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "site.enrollment_code_issued", entityType: "website", entityId: site.id,
+      websiteId: site.id, after: { expiresAt: issued.expiresAt },
+    });
+    res.json({ ok: true, site: { id: site.id, name: site.name, url: site.url }, ...issued });
+  } catch (err) { return fail(res, err); }
+}));
+
+/**
+ * Rotates a site's credential by revoking the current one and issuing a fresh
+ * enrollment code. Deliberately not a silent swap: the site has to store the
+ * new secret, so rotation always ends with someone re-connecting it, and the
+ * old secret is dead the moment this returns.
+ */
+router.post("/websites/:id/rotate-credential", asyncRoute(async (req, res) => {
+  const site = await getWebsiteSite(req.params.id);
+  if (!site) return res.status(404).json({ ok: false, error: "Unknown website." });
+  try {
+    await credentials.revokeCredential(site.id);
+    const issued = await credentials.issueEnrollmentCode(site.id, req.user.id);
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "site.credential_rotated", entityType: "website", entityId: site.id,
+      websiteId: site.id, after: { expiresAt: issued.expiresAt },
+    });
+    res.json({ ok: true, site: { id: site.id, name: site.name, url: site.url }, ...issued });
+  } catch (err) { return fail(res, err); }
+}));
+
+// Revokes without reissuing. Monitoring is unaffected; only user management
+// stops working for that site.
+router.post("/websites/:id/revoke-credential", asyncRoute(async (req, res) => {
+  const site = await getWebsiteSite(req.params.id);
+  if (!site) return res.status(404).json({ ok: false, error: "Unknown website." });
+  await credentials.revokeCredential(site.id);
+  await audit.record({
+    ...audit.actorFrom(req),
+    action: "site.credential_revoked", entityType: "website", entityId: site.id, websiteId: site.id,
+  });
+  res.json({ ok: true, capabilities: await getCapabilities(site, { force: true }) });
 }));
 
 // --------------------------------------------------------------------- audit

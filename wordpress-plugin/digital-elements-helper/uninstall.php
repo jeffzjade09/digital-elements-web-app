@@ -19,3 +19,28 @@ delete_option('deheled_security_result');
 delete_option('deheled_license_status');
 delete_option('deheled_images_result');   // cached image audit — derived data
 wp_clear_scheduled_hook('deheled_security_scan_event');
+
+/**
+ * User-management credential and its bookkeeping.
+ *
+ * Unlike the license key, this IS removed. The license key is kept because a
+ * delete-and-reinstall would otherwise silently disconnect monitoring, which is
+ * read-only. This credential can create and change WordPress users, so leaving
+ * a live secret behind on a site that deliberately removed the plugin is the
+ * wrong default — re-enrolling takes one code and is the safer thing to require.
+ */
+delete_option('deheled_um_key_id');
+delete_option('deheled_um_secret');
+delete_option('deheled_um_scopes');
+delete_option('deheled_um_enrolled_at');
+
+// Replay-protection nonces and idempotency records are short-lived derived
+// data; sweep whatever is still lying around.
+global $wpdb;
+$wpdb->query(
+    $wpdb->prepare(
+        "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+        $wpdb->esc_like('deheled_um_n_') . '%',
+        $wpdb->esc_like('deheled_um_i_') . '%'
+    )
+);

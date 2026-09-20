@@ -31,6 +31,8 @@ import { buildImageReport } from "./imageReport.js";
 import { runMigrations } from "./migrate.js";
 import { loadGrants, startGrantRefresh } from "./usermgmt/grants.js";
 import wpUsersRouter from "./routes/wpusers.js";
+import { redeemEnrollmentCode, isConfigured as isUserMgmtConfigured } from "./usermgmt/credentials.js";
+import { record as recordAudit } from "./usermgmt/audit.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, "..", "public");
@@ -139,6 +141,47 @@ app.get("/api/plugin/history", rateLimit({ name: "history", max: 30 }), async (r
     res.status(500).json({ ok: false, error: "lookup failed" });
   }
 });
+// Enrollment: a site redeems a one-time code for its user-management
+// credential. Called by the helper plugin, server-to-server, not by a browser.
+//
+// Two independent secrets are required — the code an administrator pasted into
+// the site's own admin screen AND that site's license key — so neither an
+// intercepted code nor a leaked license key is enough on its own. The site
+// always initiates; the dashboard never pushes a credential to a site, which is
+// what keeps user management from being switchable on remotely.
+app.post("/api/plugin/enroll", rateLimit({ name: "enroll", windowMs: 60_000, max: 10 }), async (req, res) => {
+  const b = req.body || {};
+  // Every failure answers identically. Telling a prober which half was wrong
+  // would turn this into an oracle for valid codes or license keys.
+  const refuse = () => res.status(403).json({ ok: false, error: "That enrollment code isn't valid or has expired." });
+
+  if (!isUserMgmtConfigured()) {
+    return res.status(503).json({ ok: false, error: "User management isn't available on this dashboard yet." });
+  }
+  const code = String(b.code || "").trim();
+  const licenseKey = String(b.license_key || "").trim();
+  if (!code || !licenseKey) return refuse();
+
+  try {
+    const result = await redeemEnrollmentCode({ code, licenseKey, ip: req.ip });
+    if (!result.ok) {
+      console.warn(`[enroll] refused (${result.reason}) from ${req.ip}`);
+      return refuse();
+    }
+    await recordAudit({
+      action: "site.enrolled", entityType: "website", entityId: result.websiteId,
+      websiteId: result.websiteId, ip: req.ip,
+      after: { keyId: result.keyId, scopes: result.scopes, pluginVersion: b.plugin_version || null, apiVersion: b.api_version || null },
+    });
+    console.log(`[enroll] ${result.siteName} enrolled for user management (${result.keyId})`);
+    // The only time the secret is ever returned, to the site that will hold it.
+    res.json({ ok: true, key_id: result.keyId, secret: result.secret, scopes: result.scopes, site: result.siteName });
+  } catch (err) {
+    console.error("[enroll] failed:", err.message);
+    res.status(500).json({ ok: false, error: "Enrollment failed. Please try again." });
+  }
+});
+
 app.get("/login", (req, res) => res.sendFile(path.join(PUBLIC, "login.html")));
 app.get("/logo.png", (req, res) => res.sendFile(path.join(PUBLIC, "logo.png")));
 

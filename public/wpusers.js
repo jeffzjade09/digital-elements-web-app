@@ -16,6 +16,7 @@ const WPU = {
   users: [],
   roles: [],
   loaded: false,
+  websites: [],
   filters: { q: "", team: "", role: "", status: "" },
   selected: new Set(),
 };
@@ -23,8 +24,20 @@ const WPU = {
 const WPU_TABS = [
   { id: "teams", label: "Teams" },
   { id: "users", label: "Users" },
+  { id: "websites", label: "Websites" },
   { id: "audit", label: "Activity log" },
 ];
+
+// How a site's readiness is presented. One place decides the wording and colour
+// so the Websites tab and every site picker agree.
+const WPU_READINESS = {
+  ready:                  { label: "Ready",           cls: "ok" },
+  needs_enrollment:       { label: "Not connected",   cls: "warn" },
+  plugin_update_required: { label: "Update required", cls: "warn" },
+  helper_disabled:        { label: "Helper off",      cls: "none" },
+  unreachable:            { label: "Unreachable",     cls: "disabled" },
+  unknown:                { label: "Not checked",     cls: "none" },
+};
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -164,6 +177,7 @@ function wpuSetTab(tab) {
 function wpuRenderPanel() {
   if (WPU.tab === "teams") return wpuRenderTeams();
   if (WPU.tab === "users") return wpuRenderUsers();
+  if (WPU.tab === "websites") return wpuRenderWebsites();
   if (WPU.tab === "audit") return wpuRenderAudit();
 }
 
@@ -515,6 +529,192 @@ async function wpuConfirmDeleteUser(id) {
     await wpuApi(`/users/${id}`, { method: "DELETE" });
     wpuCloseModal();
     await wpuRefresh({ teams: true, users: true });
+  } catch (err) { wpuModalError(err.message); }
+}
+
+/* ----------------------------------------------------------------- websites */
+
+/**
+ * Which connected sites can be used for user management, and what to do about
+ * the ones that can't.
+ *
+ * Every site is probed before it can be selected anywhere, so "needs a plugin
+ * update" or "isn't connected" is visible here rather than appearing as a
+ * failure halfway through a bulk operation.
+ */
+async function wpuRenderWebsites(force) {
+  const panel = document.getElementById("wpuPanel");
+  panel.innerHTML = `<div class="wpu-card"><div class="wpu-empty">${force ? "Re-checking every site…" : "Checking sites…"}</div></div>`;
+
+  let data;
+  try {
+    data = await wpuApi("/websites" + (force ? "?refresh=1" : ""));
+  } catch (err) {
+    panel.innerHTML = `<div class="wpu-card"><div class="wpu-empty"><h4>Couldn’t check the websites</h4><div class="wpu-note">${esc(err.message)}</div></div></div>`;
+    return;
+  }
+
+  if (!data.configured) {
+    panel.innerHTML = `<div class="wpu-card"><div class="wpu-empty">
+      <h4>User management isn’t configured on this server</h4>
+      <div class="wpu-note">Set <code>USER_MGMT_ENC_KEY</code> in the environment and restart.
+      Teams and staff work without it; connecting websites doesn’t.
+      See <code>docs/user-management.md</code>.</div></div></div>`;
+    return;
+  }
+
+  WPU.websites = data.websites;
+  const counts = data.websites.reduce((acc, w) => { acc[w.readiness] = (acc[w.readiness] || 0) + 1; return acc; }, {});
+
+  const rows = data.websites.map((w) => {
+    const state = WPU_READINESS[w.readiness] || WPU_READINESS.unknown;
+    return `
+    <tr>
+      <td data-label="Website"><span class="wpu-name">${esc(w.name)}</span><span class="wpu-sub">${esc(w.url)}</span></td>
+      <td data-label="Status">
+        <span class="wpu-chip ${esc(state.cls)}" title="${esc(w.message || "")}">${esc(state.label)}</span>
+        ${w.multisite ? ' <span class="wpu-chip ext" title="Multisite isn’t supported yet">Multisite</span>' : ""}
+      </td>
+      <td data-label="Plugin">${w.pluginVersion ? `<span class="wpu-chip role">${esc(w.pluginVersion)}</span>` : '<span class="wpu-chip none">—</span>'}</td>
+      <td data-label="Permissions">${w.enrolled && w.scopes.length
+        ? w.scopes.map((sc) => `<span class="wpu-chip role">${esc(sc)}</span>`).join(" ")
+        : '<span class="wpu-chip none">—</span>'}</td>
+      <td data-label="Checked" class="wpu-audit-when">${esc(w.checkedAt ? wpuWhen(w.checkedAt) : "—")}</td>
+      <td class="wpu-actions">
+        ${w.enrolled
+          ? `<button class="wpu-linkbtn" onclick="wpuRotateCredential('${escJs(w.websiteId)}')">Rotate</button>
+             <button class="wpu-linkbtn danger" onclick="wpuRevokeCredential('${escJs(w.websiteId)}')">Disconnect</button>`
+          : `<button class="wpu-linkbtn" onclick="wpuIssueCode('${escJs(w.websiteId)}')">Connect…</button>`}
+      </td>
+    </tr>`;
+  }).join("");
+
+  panel.innerHTML = `
+    <div class="wpu-bar">
+      <div class="grow wpu-note">
+        A website has to be connected before anyone can be added to it. Connecting takes one
+        code, pasted into that site’s <strong>DE Monitoring</strong> panel by someone with
+        access to its admin — user management can’t be switched on remotely.
+      </div>
+      <button class="btn" onclick="wpuRenderWebsites(true)">Re-check all</button>
+    </div>
+    ${Object.keys(counts).length ? `<div class="wpu-bar">${Object.entries(counts).map(([k, n]) => {
+      const st = WPU_READINESS[k] || WPU_READINESS.unknown;
+      return `<span class="wpu-chip ${esc(st.cls)}">${n} ${esc(st.label.toLowerCase())}</span>`;
+    }).join("")}</div>` : ""}
+    <div class="wpu-card">
+      ${data.websites.length ? `<table class="wpu-table">
+        <thead><tr><th>Website</th><th>Status</th><th>Plugin</th><th>Permissions</th><th>Checked</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table>`
+      : '<div class="wpu-empty"><h4>No websites yet</h4><div class="wpu-note">Add websites from the Websites section first.</div></div>'}
+    </div>
+    <div class="wpu-note" style="margin-top:12px">
+      Deleting users and granting Administrator stay off unless each site’s own administrator
+      turns them on in its DE Monitoring panel — a local switch this dashboard can’t flip.
+    </div>`;
+}
+
+async function wpuIssueCode(websiteId, options) {
+  const rotate = !!(options && options.rotate);
+  const site = (WPU.websites || []).find((w) => w.websiteId === websiteId);
+  try {
+    const res = await wpuApi(`/websites/${websiteId}/${rotate ? "rotate-credential" : "enrollment-code"}`, { method: "POST" });
+    wpuShowCode(res, rotate);
+  } catch (err) {
+    wpuOpenModal({
+      eyebrow: "Websites",
+      title: site ? `Connect ${site.name}` : "Connect website",
+      body: `<div class="wpu-danger">${esc(err.message)}</div>`,
+      actions: '<button class="btn-ghost" onclick="wpuCloseModal()">Close</button>',
+    });
+  }
+}
+
+function wpuShowCode(res, rotated) {
+  const mins = Math.round((res.expiresInSeconds || 900) / 60);
+  wpuOpenModal({
+    eyebrow: "Websites",
+    title: `${rotated ? "New code for" : "Connect"} ${res.site.name}`,
+    body: `
+      ${rotated ? `<div class="wpu-warnbox">
+        <strong>The old credential is now revoked.</strong> User management won’t work on this
+        site until someone re-connects it with the code below.
+      </div>` : ""}
+      <div class="wpu-codebox">
+        <span class="wpu-code">${esc(res.code)}</span>
+        <button class="wpu-linkbtn" onclick="wpuCopyCode('${escJs(res.code)}', this)">Copy</button>
+      </div>
+      <div class="wpu-note" style="margin-bottom:16px">
+        Valid for ${mins} minutes, and works once. It is shown only now — generate a new one
+        if it gets lost.
+      </div>
+      <div class="wpu-field">
+        <label>What to do with it</label>
+        <div class="wpu-note">
+          1. Open <strong>${esc(res.site.url)}</strong> → WP Admin → <strong>DE Monitoring</strong>.<br />
+          2. Under <strong>User management</strong>, paste the code and press Connect.<br />
+          3. Come back here and press <strong>Re-check all</strong>.
+        </div>
+      </div>
+      <div class="wpu-note">
+        The code alone grants nothing — the site also has to present its own monitoring
+        license key to redeem it.
+      </div>`,
+    actions: '<button class="btn-primary" onclick="wpuCloseModal(); wpuRenderWebsites(true)">Done</button>',
+  });
+}
+
+function wpuCopyCode(code, btn) {
+  const done = (text) => { btn.textContent = text; setTimeout(() => { btn.textContent = "Copy"; }, 1500); };
+  if (!navigator.clipboard) return done("Press Ctrl+C");
+  navigator.clipboard.writeText(code).then(() => done("Copied"), () => done("Press Ctrl+C"));
+}
+
+function wpuRotateCredential(websiteId) {
+  const site = (WPU.websites || []).find((w) => w.websiteId === websiteId);
+  wpuOpenModal({
+    eyebrow: "Websites",
+    title: `Rotate the credential for ${site ? site.name : "this website"}?`,
+    body: `
+      <div class="wpu-warnbox">
+        <strong>This immediately revokes the current credential.</strong> User management stops
+        working for this site until someone pastes the new code into its DE Monitoring panel.
+        Monitoring and the license key are unaffected, and no WordPress account is changed.
+      </div>
+      <div class="wpu-note">Rotate if the credential may have been exposed, or as routine hygiene.</div>`,
+    actions: `<button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>
+              <button class="btn-primary" onclick="wpuCloseModal(); wpuIssueCode('${escJs(websiteId)}', { rotate: true })">Rotate and show new code</button>`,
+  });
+}
+
+function wpuRevokeCredential(websiteId) {
+  const site = (WPU.websites || []).find((w) => w.websiteId === websiteId);
+  wpuOpenModal({
+    eyebrow: "Websites",
+    title: `Disconnect ${site ? site.name : "this website"}?`,
+    body: `
+      <div class="wpu-danger">
+        <strong>User management will stop working for this site.</strong> Monitoring, the
+        license key, and every WordPress account on the site are left exactly as they are.
+        You can reconnect at any time with a new code.
+      </div>
+      <div class="wpu-field">
+        <label for="wpu-w-confirm">Type <strong>DISCONNECT</strong> to confirm</label>
+        <input id="wpu-w-confirm" type="text" autocomplete="off" placeholder="DISCONNECT" />
+      </div>`,
+    actions: `<button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>
+              <button class="btn-primary" style="background:var(--fail)" onclick="wpuConfirmRevoke('${escJs(websiteId)}')">Disconnect</button>`,
+  });
+}
+
+async function wpuConfirmRevoke(websiteId) {
+  if (document.getElementById("wpu-w-confirm").value.trim().toUpperCase() !== "DISCONNECT") {
+    return wpuModalError("Type DISCONNECT to confirm.");
+  }
+  try {
+    await wpuApi(`/websites/${websiteId}/revoke-credential`, { method: "POST" });
+    wpuCloseModal();
+    wpuRenderWebsites(true);
   } catch (err) { wpuModalError(err.message); }
 }
 

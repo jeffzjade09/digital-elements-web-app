@@ -1,0 +1,126 @@
+[
+  {
+    "name": "simple GET, no query, no body",
+    "secret": "test-secret-0123456789",
+    "method": "GET",
+    "route": "/de/v2/capabilities",
+    "query": null,
+    "timestamp": 1790000000,
+    "nonce": "11111111-2222-3333-4444-555555555555",
+    "idempotencyKey": "",
+    "body": null,
+    "canonical": "GET\n/de/v2/capabilities\n\n1790000000\n11111111-2222-3333-4444-555555555555\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "WXiUD83EFYP2sXS2BM/YhOB9Ey/xEN5YMFtpmv7jgtI="
+  },
+  {
+    "name": "GET with query sorted by name",
+    "secret": "test-secret-0123456789",
+    "method": "GET",
+    "route": "/de/v2/users",
+    "query": {
+      "search": "jeff",
+      "role": "editor",
+      "page": 2
+    },
+    "timestamp": 1790000001,
+    "nonce": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "idempotencyKey": "",
+    "body": null,
+    "canonical": "GET\n/de/v2/users\npage=2&role=editor&search=jeff\n1790000001\naaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "8NPprVmhBfoNIfrzlvEIfC0N1F6JoOGv8JzwgSBpWJ8="
+  },
+  {
+    "name": "query order does not matter",
+    "secret": "test-secret-0123456789",
+    "method": "GET",
+    "route": "/de/v2/users",
+    "query": {
+      "page": 2,
+      "role": "editor",
+      "search": "jeff"
+    },
+    "timestamp": 1790000001,
+    "nonce": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "idempotencyKey": "",
+    "body": null,
+    "canonical": "GET\n/de/v2/users\npage=2&role=editor&search=jeff\n1790000001\naaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "8NPprVmhBfoNIfrzlvEIfC0N1F6JoOGv8JzwgSBpWJ8="
+  },
+  {
+    "name": "route is normalized",
+    "secret": "test-secret-0123456789",
+    "method": "GET",
+    "route": "de/v2//users/",
+    "query": null,
+    "timestamp": 1790000002,
+    "nonce": "nonce-route",
+    "idempotencyKey": "",
+    "body": null,
+    "canonical": "GET\n/de/v2/users\n\n1790000002\nnonce-route\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "6tKmfHUm+On5OAGh/oDXDyvkyuRhpXVSnGbsq81A7dI="
+  },
+  {
+    "name": "POST with body and idempotency key",
+    "secret": "another-secret-éà",
+    "method": "POST",
+    "route": "/de/v2/users",
+    "query": null,
+    "timestamp": 1790000003,
+    "nonce": "nonce-post",
+    "idempotencyKey": "job-1:site-2:user-3",
+    "body": "{\"email\":\"jeff@digitalelementsgroup.com\",\"role\":\"editor\"}",
+    "canonical": "POST\n/de/v2/users\n\n1790000003\nnonce-post\njob-1:site-2:user-3\n14fbb6b0a1a844ff5d3978f7a35e9cfb697d32d9929a26df2d3985fa407eec5a",
+    "signature": "rlvClEL7DM5QufnfGFtVpYHtRQnIQkGPPMBXV6JTX1Q="
+  },
+  {
+    "name": "unsigned params are excluded",
+    "secret": "test-secret-0123456789",
+    "method": "GET",
+    "route": "/de/v2/roles",
+    "query": {
+      "rest_route": "/de/v2/roles",
+      "_locale": "user",
+      "refresh": "1"
+    },
+    "timestamp": 1790000004,
+    "nonce": "nonce-unsigned",
+    "idempotencyKey": "",
+    "body": null,
+    "canonical": "GET\n/de/v2/roles\nrefresh=1\n1790000004\nnonce-unsigned\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "HjIJIoie6QJdU61fdWcsUebaeJL0RUvNI3nhDGDmoIk="
+  },
+  {
+    "name": "RFC3986 characters in query values",
+    "secret": "test-secret-0123456789",
+    "method": "GET",
+    "route": "/de/v2/users/lookup",
+    "query": {
+      "email": "a+b (x)@d.com",
+      "note": "it's*here!"
+    },
+    "timestamp": 1790000005,
+    "nonce": "nonce-encode",
+    "idempotencyKey": "",
+    "body": null,
+    "canonical": "GET\n/de/v2/users/lookup\nemail=a%2Bb%20%28x%29%40d.com&note=it%27s%2Ahere%21\n1790000005\nnonce-encode\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "jjX6C27ulEFUCKUVOBn1f2FiPaDcQ43vptjfB41lCvU="
+  },
+  {
+    "name": "repeated query parameter",
+    "secret": "test-secret-0123456789",
+    "method": "DELETE",
+    "route": "/de/v2/users/42",
+    "query": {
+      "site": [
+        "b",
+        "a"
+      ]
+    },
+    "timestamp": 1790000006,
+    "nonce": "nonce-repeat",
+    "idempotencyKey": "k",
+    "body": "{\"confirm\":true}",
+    "canonical": "DELETE\n/de/v2/users/42\nsite=a&site=b\n1790000006\nnonce-repeat\nk\n63547eaf4a83685f619c8e5945531198eea290b70c54ca9a45db5dbd3fddee34",
+    "signature": "8yHrfGNG2zx6UoRoaJl7muUv3Ur4jaxx5OlyovHF5Zk="
+  }
+]

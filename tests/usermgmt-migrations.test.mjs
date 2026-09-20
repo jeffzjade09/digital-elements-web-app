@@ -42,8 +42,15 @@ console.log("\n--- nothing destructive ---");
 for (const bad of ["drop table", "drop column", "truncate", "drop database", "delete from"]) {
   ok(`no "${bad}"`, !allSql.includes(bad));
 }
-ok("existing monitoring tables are not altered",
-   !/alter table\s+(app_users|websites|metric_samples|request_metrics)\b/.test(allSql));
+// Altering `websites` is expected — the per-site credential columns live there
+// — but only ever additively. A drop or a type change on a live monitoring
+// table is what must not slip through.
+const alters = allSql.match(/alter table\s+\w+[^;]*/g) || [];
+ok("every alter is an additive add-column",
+   alters.every((a) => /add column if not exists/.test(a)),
+   alters.filter((a) => !/add column if not exists/.test(a)).join(" | "));
+ok("app_users and the metric tables are untouched",
+   !/alter table\s+(app_users|metric_samples|request_metrics|status_events)\b/.test(allSql));
 
 console.log("\n--- 001: core entities ---");
 const core = byVersion["001_user_management_core"];
@@ -102,9 +109,21 @@ for (const grantee of ["ryan", "danny", "jeff"]) {
      new RegExp(`wp_user_managers[\\s\\S]*${grantee}@digitalelementsgroup\\.com`).test(seed.sql));
 }
 
+console.log("\n--- 003: per-site credentials ---");
+const creds = byVersion["003_site_user_management_credentials"];
+ok("003 exists", !!creds);
+ok("the secret column is the encrypted one", /um_secret_enc/.test(creds.sql));
+ok("no plaintext secret column", !/um_secret\s+text/.test(creds.sql));
+ok("key ids are unique across sites", /websites_um_key_id_idx on websites \(um_key_id\)/.test(creds.sql));
+ok("enrollment codes are stored hashed", /code_hash\s+text not null unique/.test(creds.sql));
+ok("enrollment codes expire", /expires_at\s+timestamptz not null/.test(creds.sql));
+ok("enrollment codes are single-use", /redeemed_at/.test(creds.sql));
+ok("codes die with their website", /website_id\s+uuid not null references websites\(id\) on delete cascade/.test(creds.sql));
+ok("the license key is left alone", !/license_key\s*=/.test(creds.sql));
+
 console.log("\n--- the reference schema stays in step ---");
 const schema = fs.readFileSync(path.join(ROOT, "db", "schema.sql"), "utf8");
-for (const table of ["teams", "staff_users", "audit_log", "schema_migrations"]) {
+for (const table of ["teams", "staff_users", "audit_log", "schema_migrations", "um_enrollment_codes"]) {
   ok(`db/schema.sql documents ${table}`, new RegExp(`\\b${table}\\b`).test(schema));
 }
 

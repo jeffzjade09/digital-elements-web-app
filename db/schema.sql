@@ -150,3 +150,23 @@ create table if not exists audit_log (
   ip            text,
   at            timestamptz not null default now()
 );
+
+-- Per-site user-management credential (added to `websites` by migration 003).
+-- Separate from the license key so a leaked license key can never authorize a
+-- user write, and either can be rotated independently. The secret is stored
+-- encrypted (AES-256-GCM under USER_MGMT_ENC_KEY) and never leaves the server.
+--   um_key_id, um_secret_enc, um_scopes, um_enrolled_at, um_rotated_at,
+--   um_plugin_version, um_api_version, um_caps, um_caps_checked_at, um_caps_error
+
+-- One-time codes a site redeems for its credential. The code itself is stored
+-- only as a hash, so this table is useless to anyone who reads it.
+create table if not exists um_enrollment_codes (
+  id          uuid primary key default gen_random_uuid(),
+  website_id  uuid not null references websites(id) on delete cascade,
+  code_hash   text not null unique,
+  expires_at  timestamptz not null,
+  redeemed_at timestamptz,
+  redeemed_ip text,
+  created_by  uuid references app_users(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
