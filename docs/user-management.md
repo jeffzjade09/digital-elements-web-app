@@ -8,10 +8,10 @@ job is to provide the secure API the app calls — there is no user-management
 screen inside the plugin.
 
 > **Status.** This document describes the whole feature; the sections marked
-> _(later phase)_ are not built yet. What exists today is the app-side roster
-> (teams, staff, activity log) and the secure channel to each site (enrollment,
-> signed requests, capability probing). Reading and writing WordPress users
-> comes next.
+> _(later phase)_ are not built yet. What exists today is the app-side roster,
+> the secure channel to each site, and the read path: each site's real roles,
+> existing-account lookup, and the preflight/review screen. **Nothing writes to
+> a WordPress site yet** — applying a reviewed plan is the next phase.
 
 ## Concepts
 
@@ -29,10 +29,28 @@ person has both, `staff_users.app_user_id` links them.
 Subscriber, plus any custom role a site defines). A person's role on a site is
 resolved in this order:
 
-1. a per-website override _(later phase)_
+1. a per-website override
 2. the person's own default role
 3. their team's default role
 4. `subscriber`
+
+### Elevated roles, in two tiers
+
+A role is reported with two flags, and the difference is load-bearing:
+
+| Flag | Means | Effect |
+|---|---|---|
+| `is_site_admin` | holds `manage_options`, `promote_users`, `edit_users` or `delete_users` | **Requires an explicit confirmation** |
+| `is_admin_like` | the above, **or** `unfiltered_html` | Shown as a notice |
+
+They are separate because **stock WordPress grants `unfiltered_html` to Editor**,
+and Editor is every team's default role. A confirmation keyed on the broad flag
+would fire on the single most common assignment there is — and a confirmation
+that fires on the common case is one people learn to click through, which is
+worse than not having it.
+
+Both flags come from the site's own capability map, so a plugin-defined role
+that can administer the site is caught the same way Administrator is.
 
 ## Who can use it
 
@@ -88,12 +106,14 @@ src/usermgmt/
   signing.js              the canonical string and HMAC (mirrored in PHP)
   wpClient.js             signed calls to a site, SSRF guard, error mapping
   capabilities.js         per-site probe + cache, readiness states
+  preflight.js            predicts every (person × website) outcome; writes nothing
 src/routes/wpusers.js     thin Express layer over the modules above
 public/wpusers.{js,css}   the Settings → WP Users interface
 
 wordpress-plugin/digital-elements-helper/includes/
   um-auth.php             signature verification, nonces, scopes, idempotency
   um-rest.php             the de/v2 namespace and the capabilities probe
+  um-users.php            read endpoints: roles, users, existence lookup
   um-admin.php            the site's own connect / permissions / disconnect panel
 ```
 
@@ -253,6 +273,8 @@ mount point in `src/server.js`.
 | POST | `/users/move-team` | Bulk team move |
 | GET | `/websites` | Sites with readiness, plugin version and scopes (`?refresh=1` re-probes) |
 | GET | `/websites/:id/capabilities` | One site's probe result |
+| GET | `/websites/:id/roles` | That site's real roles (`?refresh=1` re-asks) |
+| POST | `/preflight` | Predicts every (person × website) outcome. Writes nothing |
 | POST | `/websites/:id/enrollment-code` | Issue a one-time connect code |
 | POST | `/websites/:id/rotate-credential` | Revoke and issue a new code |
 | POST | `/websites/:id/revoke-credential` | Disconnect a site |
@@ -269,13 +291,43 @@ rate-limited, called by the plugin rather than a browser, and answers every
 failure identically so it cannot be used as an oracle for valid codes or
 license keys.
 
+## Preflight — the review screen's contract
+
+`POST /api/wpusers/preflight` returns one row per (person × website) with
+`exists`, `currentRoles`, `managed`, `requestedRole`, `roleAvailable`,
+`pluginSupported`, `pluginVersion`, a predicted `action`, and `blockers[]`.
+
+| Action | Meaning |
+|---|---|
+| `create` | No account here — one would be made |
+| `update` | A managed account exists with a different role |
+| `link_required` | An account exists that **isn't ours to touch** |
+| `skip` | Already correct |
+| `blocked` | Can't proceed; see `blockers[]` |
+
+Three details matter more than the rest:
+
+- **`link_required` is not a variant of `update`.** An account we didn't create
+  and nobody linked belongs to the client. It is reported, never adopted — even
+  when the role already matches, which would otherwise look like a harmless
+  skip.
+- **"Couldn't read the roles" is not "the role isn't available".** They are
+  separate blocker codes (`roles_unknown` vs `role_not_available`), because
+  saying a role is missing when we simply couldn't ask would be a lie.
+- **A failed lookup never predicts `create`.** If we couldn't determine whether
+  an account exists, predicting `create` would risk a duplicate, so the pair is
+  blocked instead.
+
+The predicted actions use the same vocabulary the sync phase reports back, so
+the review screen and the results screen line up.
+
 ## Roadmap
 
 | Phase | Contents |
 |---|---|
 | 0–1 ✅ | Migration runner, `manageWpUsers`, teams and staff, activity log, UI |
 | 2 ✅ | Scoped per-site credential, HMAC request signing, `de/v2/capabilities`, enrollment, plugin version compatibility |
-| 3 | Reading roles and users from sites, role cache, preflight review |
+| 3 ✅ | Reading roles and users from sites, role cache, preflight review |
 | 4 | Create / update / link / role change, sync jobs, bulk and whole-team assignment, retries |
 | 5 | Content ownership, reassignment, guarded deletion |
 | 6–7 | Sync dashboard, polish, plugin 2.6.0 release and rollout |
@@ -296,8 +348,12 @@ encryption, the SSRF guard and capability gating.
 `tests/usermgmt-auth.test.php` covers the plugin's side of the same contract
 against a stubbed WordPress: signature tampering, the clock window, replay
 protection, scopes and rate limiting.
+`tests/usermgmt-preflight.test.mjs` covers the prediction decision table and
+role classification.
+`tests/usermgmt-users.test.php` covers the read routes' scope enforcement and,
+above all, that a user leaves a site carrying only the fields we chose.
 
-All four run without a database or a WordPress install.
+All of them run without a database or a WordPress install.
 
 ### Against a real WordPress install
 

@@ -84,3 +84,29 @@
 .wpu-chip.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 42%, transparent); }
 .wpu-chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 42%, transparent); }
 .wpu-chip.bad { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 42%, transparent); }
+
+/* Website selection and the review screen */
+.wpu-sitelist { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 11px; }
+.wpu-site { display: flex; align-items: flex-start; gap: 11px; padding: 11px 13px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
+.wpu-site:last-child { border-bottom: none; }
+.wpu-site:hover { background: var(--panel-2); }
+.wpu-site input { width: auto; flex: none; margin-top: 3px; }
+/* Ineligible sites stay visible with their reason — hiding them turns "needs a
+   plugin update" into "where did that site go?". */
+.wpu-site.off { cursor: not-allowed; opacity: .6; }
+.wpu-site.off:hover { background: transparent; }
+.wpu-site-main { flex: 1; min-width: 0; }
+.wpu-site-name { font-weight: 600; font-size: 13px; }
+.wpu-site-reason { display: block; font-size: 11.5px; color: var(--warn); margin-top: 3px; }
+
+.wpu-roles-head { font-size: 12px; font-weight: 600; color: var(--muted); margin: 4px 0 8px; }
+.wpu-rolesets { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.wpu-roleset { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.wpu-roleset.bad { border-color: color-mix(in srgb, var(--fail) 45%, transparent); }
+.wpu-roleset-site { font-size: 12px; font-weight: 600; margin-bottom: 7px; }
+.wpu-roleset select { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 7px 9px; font-size: 12.5px; }
+.wpu-roleset-warn { font-size: 11.5px; color: var(--err-text); margin-top: 6px; line-height: 1.45; }
+
+.wpu-blocker { font-size: 11.5px; color: var(--err-text); margin-top: 5px; line-height: 1.45; }
+.wpu-row-blocked td { opacity: .85; }
+#wpuModal .modal-panel { width: min(940px, 100%); }

@@ -247,6 +247,12 @@ tests/usermgmt-signing.test.mjs     request signing, credential encryption, the
 tests/usermgmt-auth.test.php        the plugin's side of the same signing
                                     contract: tampering, clock window, replay,
                                     scopes, rate limiting
+tests/usermgmt-preflight.test.mjs   what the review screen predicts for every
+                                    person x website pair, and the two role
+                                    elevation tiers
+tests/usermgmt-users.test.php       the read routes: scope enforcement, and that
+                                    no password hash or unrelated user meta can
+                                    leave a client site
 ```
 
 ### Live check against a real WordPress install

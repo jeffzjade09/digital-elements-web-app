@@ -26,6 +26,19 @@ feature ships.
   remotely.
 - Deleting the plugin now removes the user-management credential, unlike the
   license key which is deliberately kept.
+- Read endpoints, all requiring the `users:read` scope:
+  `GET de/v2/roles` (from `get_editable_roles()`, so plugin-defined and
+  owner-restricted roles are honoured), `GET de/v2/users` (paged) and
+  `GET de/v2/users/lookup` (email first, case-insensitively, then username).
+- A user leaves this site in a fixed shape built field by field — never the
+  WP_User object with fields removed — so a future WordPress release cannot
+  silently widen what is disclosed. No password hash, no activation key, no
+  session tokens, and `_de_managed` is the only user meta read or reported.
+- Roles report two elevation tiers: `is_site_admin` (manage_options,
+  promote_users, edit_users, delete_users) and the broader `is_admin_like`
+  which also counts `unfiltered_html`. WordPress grants unfiltered_html to
+  Editor, so keeping them separate stops a confirmation firing on the most
+  ordinary assignment there is.
 
 ## 2.5.0
 - Scan images now keeps a short history of past scans (totals and counts only —

@@ -198,6 +198,7 @@ function wpuRenderTeams() {
       <td data-label="Default role">${wpuRoleChip(t.defaultWpRole)}</td>
       <td data-label="Members">${t.memberCount}</td>
       <td class="wpu-actions">
+        ${t.memberCount ? `<button class="wpu-linkbtn" onclick="wpuStartAssign({ teamId: '${escJs(t.id)}', teamName: '${escJs(t.name)}' })">Add to websites…</button>` : ""}
         <button class="wpu-linkbtn" onclick="wpuEditTeam('${escJs(t.id)}')">Edit</button>
         <button class="wpu-linkbtn danger" onclick="wpuDeleteTeam('${escJs(t.id)}')">Delete</button>
       </td>
@@ -341,6 +342,7 @@ function wpuRenderUsers() {
         ${u.domainOverride ? ' <span class="wpu-chip ext" title="Outside the agency domain">External</span>' : ""}
       </td>
       <td class="wpu-actions">
+        <button class="wpu-linkbtn" onclick="wpuStartAssign({ staffIds: ['${escJs(u.id)}'] })">Websites…</button>
         <button class="wpu-linkbtn" onclick="wpuEditUser('${escJs(u.id)}')">Edit</button>
         <button class="wpu-linkbtn danger" onclick="wpuDeleteUser('${escJs(u.id)}')">Remove</button>
       </td>
@@ -371,6 +373,7 @@ function wpuRenderUsers() {
       <span class="count">${WPU.selected.size} selected</span>
       <select id="wpu-bulk-team">${wpuTeamOptions("", { noneLabel: "No team" })}</select>
       <button class="btn" onclick="wpuBulkMove()">Move to team</button>
+      <button class="btn primary" onclick="wpuStartAssign({ staffIds: [...WPU.selected] })">Add to websites…</button>
       <button class="wpu-linkbtn" onclick="wpuClearSelection()">Clear</button>
       <span class="wpu-msg" id="wpuBulkMsg"></span>
     </div>
@@ -716,6 +719,325 @@ async function wpuConfirmRevoke(websiteId) {
     wpuCloseModal();
     wpuRenderWebsites(true);
   } catch (err) { wpuModalError(err.message); }
+}
+
+/* ------------------------------------------------------- assign & review -- */
+
+/**
+ * Choosing websites, then reviewing exactly what would happen.
+ *
+ * Nothing in this flow writes anything. It ends at a review table and a button
+ * that is deliberately inert — applying the plan is a separate, explicit action
+ * that arrives with the write phase. The point of the flow is that every
+ * problem an administrator could hit is visible BEFORE they commit: a site on
+ * an old plugin, a role that site doesn't have, and above all an account that
+ * already belongs to the client and must not be silently adopted.
+ */
+const WPU_ASSIGN = {
+  staffIds: [],
+  teamId: null,
+  teamName: null,
+  sites: [],            // readiness, from /websites
+  selected: new Set(),
+  search: "",
+  roleOverrides: {},    // websiteId -> role slug
+  siteRoles: {},        // websiteId -> { roles, defaultRole, stale, error }
+  preflight: null,
+};
+
+function wpuStartAssign({ staffIds = [], teamId = null, teamName = null } = {}) {
+  WPU_ASSIGN.staffIds = staffIds;
+  WPU_ASSIGN.teamId = teamId;
+  WPU_ASSIGN.teamName = teamName;
+  WPU_ASSIGN.selected = new Set();
+  WPU_ASSIGN.search = "";
+  WPU_ASSIGN.roleOverrides = {};
+  WPU_ASSIGN.siteRoles = {};
+  WPU_ASSIGN.preflight = null;
+  wpuOpenSitePicker();
+}
+
+function wpuAssignSubject() {
+  if (WPU_ASSIGN.teamId) return `the ${WPU_ASSIGN.teamName} team`;
+  const n = WPU_ASSIGN.staffIds.length;
+  if (n === 1) {
+    const u = WPU.users.find((x) => x.id === WPU_ASSIGN.staffIds[0]);
+    return u ? u.label : "1 person";
+  }
+  return `${n} people`;
+}
+
+/* ------------------------------------------------------- website picker --- */
+
+async function wpuOpenSitePicker() {
+  wpuOpenModal({
+    eyebrow: "Website assignment",
+    title: `Add ${wpuAssignSubject()} to websites`,
+    body: '<div class="wpu-empty">Checking websites…</div>',
+    actions: '<button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>',
+  });
+
+  try {
+    const data = await wpuApi("/websites");
+    if (!data.configured) {
+      return wpuRenderPickerError("User management isn’t configured on this server yet. Set USER_MGMT_ENC_KEY and restart.");
+    }
+    WPU_ASSIGN.sites = data.websites;
+    wpuRenderSitePicker();
+  } catch (err) {
+    wpuRenderPickerError(err.message);
+  }
+}
+
+function wpuRenderPickerError(message) {
+  const panel = document.querySelector("#wpuModal .modal-form");
+  if (panel) panel.innerHTML = `<div class="wpu-danger">${esc(message)}</div>`;
+}
+
+function wpuVisibleSites() {
+  const q = WPU_ASSIGN.search.trim().toLowerCase();
+  if (!q) return WPU_ASSIGN.sites;
+  return WPU_ASSIGN.sites.filter(
+    (s) => s.name.toLowerCase().includes(q) || s.url.toLowerCase().includes(q)
+  );
+}
+
+// Eligible means the site can actually take an assignment right now. Anything
+// else is shown — never hidden — with the reason, because "where did that site
+// go?" is a worse experience than "that site needs a plugin update".
+const wpuEligible = (s) => s.readiness === "ready";
+
+function wpuRenderSitePicker() {
+  const panel = document.querySelector("#wpuModal .modal-form");
+  const actions = document.querySelector("#wpuModal .modal-actions");
+  if (!panel) return;
+
+  const visible = wpuVisibleSites();
+  const eligible = visible.filter(wpuEligible);
+  const chosen = WPU_ASSIGN.selected.size;
+
+  const rows = visible.map((s) => {
+    const ok = wpuEligible(s);
+    const state = WPU_READINESS[s.readiness] || WPU_READINESS.unknown;
+    const needs = s.requiredApiVersion;
+    const reason = s.readiness === "plugin_update_required"
+      ? `Plugin update required (has ${s.pluginVersion || "an older version"}, needs contract v${needs})`
+      : s.message;
+
+    return `
+      <label class="wpu-site ${ok ? "" : "off"}" title="${esc(ok ? s.url : reason)}">
+        <input type="checkbox" ${ok ? "" : "disabled"} ${WPU_ASSIGN.selected.has(s.websiteId) ? "checked" : ""}
+               onchange="wpuToggleSite('${escJs(s.websiteId)}', this.checked)" />
+        <span class="wpu-site-main">
+          <span class="wpu-site-name">${esc(s.name)}</span>
+          <span class="wpu-sub">${esc(s.url)}</span>
+          ${ok ? "" : `<span class="wpu-site-reason">${esc(reason)}</span>`}
+        </span>
+        <span class="wpu-chip ${esc(state.cls)}">${esc(state.label)}</span>
+      </label>`;
+  }).join("");
+
+  panel.innerHTML = `
+    <div class="wpu-note" style="margin-bottom:12px">
+      Adding <strong>${esc(wpuAssignSubject())}</strong>. Websites that can’t take an
+      assignment yet are shown with the reason rather than hidden.
+    </div>
+    <div class="wpu-bar">
+      <input class="grow" type="search" id="wpu-site-q" placeholder="Search websites…"
+             value="${esc(WPU_ASSIGN.search)}" oninput="wpuSiteSearch(this.value)" autocomplete="off" />
+      <button class="btn" onclick="wpuSelectAllEligible()">Select all eligible (${eligible.length})</button>
+      <button class="btn" onclick="wpuClearSites()">Clear</button>
+    </div>
+    <div class="wpu-sitelist">
+      ${visible.length ? rows : '<div class="wpu-empty"><h4>No websites match that search</h4></div>'}
+    </div>`;
+
+  if (actions) {
+    actions.innerHTML = `
+      <span class="wpu-msg" id="wpuModalMsg" style="margin-right:auto">${chosen} selected</span>
+      <button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>
+      <button class="btn-primary" ${chosen ? "" : "disabled"} onclick="wpuReview()">Review ${chosen ? chosen + " website" + (chosen === 1 ? "" : "s") : ""}</button>`;
+  }
+
+  const q = document.getElementById("wpu-site-q");
+  if (q && WPU_ASSIGN.search) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+
+function wpuSiteSearch(v) { WPU_ASSIGN.search = v; wpuRenderSitePicker(); }
+function wpuToggleSite(id, on) {
+  if (on) WPU_ASSIGN.selected.add(id); else WPU_ASSIGN.selected.delete(id);
+  wpuRenderSitePicker();
+}
+function wpuSelectAllEligible() {
+  wpuVisibleSites().filter(wpuEligible).forEach((s) => WPU_ASSIGN.selected.add(s.websiteId));
+  wpuRenderSitePicker();
+}
+function wpuClearSites() { WPU_ASSIGN.selected.clear(); wpuRenderSitePicker(); }
+
+/* --------------------------------------------------------- review screen -- */
+
+async function wpuReview() {
+  const ids = [...WPU_ASSIGN.selected];
+  if (!ids.length) return;
+
+  wpuOpenModal({
+    eyebrow: "Website assignment",
+    title: "Review",
+    body: '<div class="wpu-empty">Checking each website — reading its roles and looking for existing accounts…</div>',
+    actions: '<button class="btn-ghost" onclick="wpuOpenSitePicker()">Back</button>',
+  });
+
+  try {
+    // Each site's real roles, so the per-site override picker offers what that
+    // site actually has rather than a guess.
+    await Promise.all(ids.map(async (id) => {
+      try { WPU_ASSIGN.siteRoles[id] = await wpuApi(`/websites/${id}/roles`); }
+      catch (err) { WPU_ASSIGN.siteRoles[id] = { roles: [], stale: true, error: err.message }; }
+    }));
+
+    WPU_ASSIGN.preflight = await wpuApi("/preflight", {
+      method: "POST",
+      body: {
+        staffUserIds: WPU_ASSIGN.teamId ? [] : WPU_ASSIGN.staffIds,
+        teamId: WPU_ASSIGN.teamId,
+        websiteIds: ids,
+        roleOverrides: WPU_ASSIGN.roleOverrides,
+      },
+    });
+    wpuRenderReview();
+  } catch (err) {
+    const panel = document.querySelector("#wpuModal .modal-form");
+    if (panel) panel.innerHTML = `<div class="wpu-danger">${esc(err.message)}</div>`;
+  }
+}
+
+const WPU_ACTION = {
+  create:        { label: "Will create",            cls: "ok" },
+  update:        { label: "Will update role",       cls: "ok" },
+  link_required: { label: "Already exists — link?", cls: "warn" },
+  skip:          { label: "Nothing to do",          cls: "none" },
+  blocked:       { label: "Blocked",                cls: "bad" },
+};
+
+function wpuRenderReview() {
+  const panel = document.querySelector("#wpuModal .modal-form");
+  const actions = document.querySelector("#wpuModal .modal-actions");
+  const pf = WPU_ASSIGN.preflight;
+  if (!panel || !pf) return;
+
+  const s = pf.summary;
+  const chips = [
+    s.create ? `<span class="wpu-chip ok">${s.create} to create</span>` : "",
+    s.update ? `<span class="wpu-chip ok">${s.update} role change${s.update === 1 ? "" : "s"}</span>` : "",
+    s.link_required ? `<span class="wpu-chip warn">${s.link_required} needing a link</span>` : "",
+    s.skip ? `<span class="wpu-chip none">${s.skip} already correct</span>` : "",
+    s.blocked ? `<span class="wpu-chip bad">${s.blocked} blocked</span>` : "",
+  ].filter(Boolean).join("");
+
+  // One override picker per site, not per row: the same site uses one role for
+  // everyone in this batch, which is what "a different role per website" means.
+  const siteIds = pf.sites.map((x) => x.id);
+  const rolePickers = siteIds.map((id) => {
+    const site = pf.sites.find((x) => x.id === id);
+    const info = WPU_ASSIGN.siteRoles[id] || { roles: [] };
+    const current = WPU_ASSIGN.roleOverrides[id] || "";
+    const missing = pf.rows.some((r) => r.websiteId === id && r.blockers.some((b) => b.code === "role_not_available"));
+    const unknown = pf.rows.some((r) => r.websiteId === id && r.blockers.some((b) => b.code === "roles_unknown"));
+
+    if (!info.roles.length) {
+      return `<div class="wpu-roleset">
+        <div class="wpu-roleset-site">${esc(site ? site.name : id)}</div>
+        <div class="wpu-note">${esc(unknown ? "Couldn’t read this site’s roles." : info.error || "No roles known for this site yet.")}</div>
+      </div>`;
+    }
+
+    const opts = info.roles.map((r) =>
+      `<option value="${esc(r.slug)}"${r.slug === current ? " selected" : ""}>${esc(r.name)}${r.siteAdmin ? " — administers the site" : ""}</option>`
+    ).join("");
+
+    return `<div class="wpu-roleset${missing ? " bad" : ""}">
+      <div class="wpu-roleset-site">${esc(site ? site.name : id)}</div>
+      <select onchange="wpuSetRoleOverride('${escJs(id)}', this.value)">
+        <option value=""${current ? "" : " selected"}>Use each person’s own role</option>
+        ${opts}
+      </select>
+      ${missing ? '<div class="wpu-roleset-warn">The requested role doesn’t exist here — pick one of this site’s roles.</div>' : ""}
+      ${info.stale ? '<div class="wpu-note">Showing the last roles we read from this site.</div>' : ""}
+    </div>`;
+  }).join("");
+
+  const rows = pf.rows.map((r) => {
+    const a = WPU_ACTION[r.action] || WPU_ACTION.blocked;
+    const blockers = r.blockers.map((b) => `<div class="wpu-blocker">${esc(b.message)}</div>`).join("");
+    return `
+      <tr class="${r.action === "blocked" ? "wpu-row-blocked" : ""}">
+        <td data-label="Person"><span class="wpu-name">${esc(r.staffLabel)}</span><span class="wpu-sub">${esc(r.staffEmail)}</span></td>
+        <td data-label="Website">${esc(r.websiteName)}</td>
+        <td data-label="Role">
+          <span class="wpu-chip role${r.needsAdminConfirmation ? " admin-like" : ""}">${esc(r.requestedRole)}</span>
+          ${r.roleSource === "override" ? '<span class="wpu-chip none">per-site</span>' : ""}
+        </td>
+        <td data-label="Currently">${r.exists
+          ? `<span class="wpu-chip ${r.managed ? "" : "warn"}">${esc((r.currentRoles || []).join(", ") || "no role")}</span>${r.managed ? "" : ' <span class="wpu-chip warn">not ours</span>'}`
+          : '<span class="wpu-chip none">no account</span>'}</td>
+        <td data-label="Outcome">
+          <span class="wpu-chip ${esc(a.cls)}">${esc(a.label)}</span>
+          ${r.note && r.action !== "blocked" ? `<div class="wpu-note">${esc(r.note)}</div>` : ""}
+          ${blockers}
+        </td>
+      </tr>`;
+  }).join("");
+
+  panel.innerHTML = `
+    <div class="wpu-bar">${chips}</div>
+
+    ${s.link_required ? `<div class="wpu-warnbox">
+      <strong>${s.link_required} account${s.link_required === 1 ? "" : "s"} already exist and aren’t managed by us.</strong>
+      Those belong to the client until someone deliberately links them. Nothing is
+      changed on them, and they’re never adopted automatically.
+    </div>` : ""}
+
+    ${s.needsAdminConfirmation ? `<div class="wpu-danger">
+      <strong>${s.needsAdminConfirmation} assignment${s.needsAdminConfirmation === 1 ? "" : "s"} would grant a role that can administer the site.</strong>
+      That needs an explicit confirmation before it can be applied.
+    </div>` : ""}
+
+    ${s.contentRisk ? `<div class="wpu-note" style="margin-bottom:14px">
+      ${s.contentRisk} assignment${s.contentRisk === 1 ? "" : "s"} use a role that can post unfiltered HTML
+      (WordPress gives Editor this by default). Worth knowing, not a blocker.
+    </div>` : ""}
+
+    <div class="wpu-roles-head">Role per website</div>
+    <div class="wpu-rolesets">${rolePickers}</div>
+
+    <div class="wpu-card" style="margin-top:6px">
+      <table class="wpu-table">
+        <thead><tr><th>Person</th><th>Website</th><th>Role</th><th>Currently</th><th>Outcome</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+
+    <div class="wpu-note" style="margin-top:12px">
+      Checked ${s.people} ${s.people === 1 ? "person" : "people"} across ${s.sites}
+      website${s.sites === 1 ? "" : "s"}. Nothing has been changed — this is a preview.
+    </div>`;
+
+  if (actions) {
+    actions.innerHTML = `
+      <span class="wpu-msg" id="wpuModalMsg" style="margin-right:auto"></span>
+      <button class="btn-ghost" onclick="wpuOpenSitePicker()">Back</button>
+      <button class="btn-primary" disabled title="Applying assignments arrives in the next phase">
+        Apply ${s.actionable} change${s.actionable === 1 ? "" : "s"}
+      </button>`;
+  }
+}
+
+// Changing a per-site role re-runs the preflight, because the prediction for
+// every row on that site depends on it.
+function wpuSetRoleOverride(websiteId, role) {
+  if (role) WPU_ASSIGN.roleOverrides[websiteId] = role;
+  else delete WPU_ASSIGN.roleOverrides[websiteId];
+  wpuReview();
 }
 
 /* -------------------------------------------------------------------- audit */

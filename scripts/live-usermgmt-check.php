@@ -98,6 +98,9 @@ do_action('rest_api_init', $server);
 $routes = $server->get_routes();
 
 ok('de/v2/capabilities is registered', isset($routes['/de/v2/capabilities']));
+ok('de/v2/roles is registered', isset($routes['/de/v2/roles']));
+ok('de/v2/users is registered', isset($routes['/de/v2/users']));
+ok('de/v2/users/lookup is registered', isset($routes['/de/v2/users/lookup']));
 ok('the monitoring namespace still works', isset($routes['/wpmonitor/v1/status']));
 
 foreach ($routes as $route => $handlers) {
@@ -161,7 +164,10 @@ function live_signed_request($method, $route, $query = array(), $body = '', $ove
 ok('a correctly signed request passes against the real options API',
     deheled_um_verify_request(live_signed_request('GET', '/de/v2/capabilities'), 'users:read') === true);
 
-$replayable = live_signed_request('GET', '/de/v2/capabilities', array(), '', array('nonce' => 'live-replay-once'));
+// Unique per run: a fixed nonce would still be claimed from the previous run
+// for the length of the replay window, so the script would only pass once every
+// ten minutes.
+$replayable = live_signed_request('GET', '/de/v2/capabilities', array(), '', array('nonce' => 'live-replay-' . wp_generate_uuid4()));
 ok('first use of a nonce passes', deheled_um_verify_request($replayable) === true);
 $second = deheled_um_verify_request($replayable);
 ok('the real options store rejects the replay',
@@ -221,6 +227,140 @@ deheled_um_disconnect();
 ok('a previously valid request stops working once disconnected',
     is_wp_error(deheled_um_verify_request($req)));
 ok('the secret is gone from the options table', get_option(DEHELED_UM_SECRET, '') === '');
+
+/* --------------------------------------------------- read endpoints ------- */
+// Re-enroll: the disconnect check above deliberately revoked the credential.
+update_option(DEHELED_UM_KEY_ID, $KEY, 'no');
+update_option(DEHELED_UM_SECRET, $SECRET, 'no');
+update_option(DEHELED_UM_SCOPES, deheled_um_default_scopes(), 'no');
+
+echo "\n=== de/v2/roles against the real role list ===\n";
+ok('a signed request with users:read is accepted',
+    deheled_um_verify_request(live_signed_request('GET', '/de/v2/roles'), 'users:read') === true);
+
+$roles_body = deheled_um_rest_roles(new WP_REST_Request('GET', '/de/v2/roles'));
+$roles = $roles_body->get_data()['roles'];
+ok('returns this site\'s roles', is_array($roles) && count($roles) >= 5);
+
+$by_slug = array();
+foreach ($roles as $r) $by_slug[$r['slug']] = $r;
+
+ok('includes administrator', isset($by_slug['administrator']));
+ok('administrator is flagged admin-like', !empty($by_slug['administrator']['is_admin_like']));
+ok('...naming the capabilities that caused it', !empty($by_slug['administrator']['admin_like_caps']));
+ok('administrator is a site administrator', !empty($by_slug['administrator']['is_site_admin']));
+ok('subscriber is neither',
+    isset($by_slug['subscriber'])
+    && $by_slug['subscriber']['is_admin_like'] === false
+    && $by_slug['subscriber']['is_site_admin'] === false);
+
+// Stock WordPress grants unfiltered_html to Editor, so on a real install Editor
+// IS admin-like but is NOT site administration. This is precisely why the two
+// tiers exist: a confirmation keyed on the broad flag would fire on every
+// ordinary Editor assignment, which is every team's default role.
+if (isset($by_slug['editor'])) {
+    ok('editor is admin-like on stock WordPress (it holds unfiltered_html)',
+        $by_slug['editor']['is_admin_like'] === true,
+        'caps: ' . implode(',', $by_slug['editor']['admin_like_caps']));
+    ok('...but editor is NOT a site administrator',
+        $by_slug['editor']['is_site_admin'] === false);
+}
+ok('every role carries a display name',
+    count(array_filter($roles, function ($r) { return $r['name'] !== ''; })) === count($roles));
+ok('the site default role is reported',
+    array_key_exists('default_role', $roles_body->get_data()));
+
+// What the plugin reports must match what WordPress itself would allow.
+$editable = deheled_um_editable_roles();
+ok('the list matches get_editable_roles() exactly',
+    count($roles) === count($editable),
+    count($roles) . ' vs ' . count($editable));
+
+echo "\n=== de/v2/users against the real user table ===\n";
+$users_body = deheled_um_rest_users(new WP_REST_Request('GET', '/de/v2/users'))->get_data();
+ok('returns a user list', is_array($users_body['users']));
+ok('reports a total', is_int($users_body['total']) && $users_body['total'] >= 1);
+ok('reports an administrator count', is_int($users_body['administrators']) && $users_body['administrators'] >= 1);
+ok('pages are bounded', $users_body['per_page'] <= DEHELED_UM_MAX_PER_PAGE);
+
+// The whole point of the allow-list shape: nothing sensitive can leak, even
+// against a real user table with real hashes in it.
+$users_json = wp_json_encode($users_body);
+ok('no password hash in the payload', strpos($users_json, '$P$') === false && strpos($users_json, '$wp$') === false);
+ok('no user_pass key', strpos($users_json, 'user_pass') === false);
+ok('no activation key', strpos($users_json, 'user_activation_key') === false);
+ok('no session tokens', strpos($users_json, 'session_tokens') === false);
+
+if (!empty($users_body['users'])) {
+    $first = $users_body['users'][0];
+    ok('each user has exactly the intended fields',
+        implode(',', array_keys($first)) === 'id,login,email,display_name,roles,managed,registered,is_admin_like,is_site_admin',
+        implode(',', array_keys($first)));
+    ok('managed is a boolean', is_bool($first['managed']));
+    ok('an untouched site reports nobody as managed', $first['managed'] === false);
+}
+
+$paged = deheled_um_rest_users(new WP_REST_Request('GET', '/de/v2/users'));
+$paged->get_data();
+ok('per_page is capped on a real query',
+    deheled_um_rest_users(new WP_REST_Request('GET', '/de/v2/users'))->get_data()['per_page'] <= DEHELED_UM_MAX_PER_PAGE);
+
+echo "\n=== de/v2/users/lookup against a real account ===\n";
+$admins = get_users(array('role' => 'administrator', 'number' => 1));
+if (empty($admins)) {
+    ok('SKIPPED — this install has no administrator to look up', true);
+} else {
+    $known = $admins[0];
+
+    $req = new WP_REST_Request('GET', '/de/v2/users/lookup');
+    $req->set_param('email', $known->user_email);
+    $hit = deheled_um_rest_user_lookup($req)->get_data();
+    ok('finds a real account by email', !empty($hit['exists']));
+    ok('...reporting it matched on email', $hit['matched'] === 'email');
+    ok('...with the right user', (int) $hit['user']['id'] === (int) $known->ID);
+    ok('...and no sensitive fields', strpos(wp_json_encode($hit), '$P$') === false);
+
+    // The column collation makes this case-insensitive; assert it rather than
+    // assume it, because matching the wrong way would create duplicates.
+    $req = new WP_REST_Request('GET', '/de/v2/users/lookup');
+    $req->set_param('email', strtoupper($known->user_email));
+    ok('email matching is case-insensitive on this database',
+        !empty(deheled_um_rest_user_lookup($req)->get_data()['exists']));
+
+    $req = new WP_REST_Request('GET', '/de/v2/users/lookup');
+    $req->set_param('login', $known->user_login);
+    $byLogin = deheled_um_rest_user_lookup($req)->get_data();
+    ok('finds a real account by login', !empty($byLogin['exists']));
+    ok('...reporting it matched on login', $byLogin['matched'] === 'login');
+
+    ok('a real account is not reported as managed', $hit['user']['managed'] === false);
+    ok('an administrator is reported as admin-like', $hit['user']['is_admin_like'] === true);
+    ok('...and as a site administrator', $hit['user']['is_site_admin'] === true);
+}
+
+$req = new WP_REST_Request('GET', '/de/v2/users/lookup');
+$req->set_param('email', 'definitely-nobody-' . wp_generate_uuid4() . '@digitalelementsgroup.com');
+$miss = deheled_um_rest_user_lookup($req)->get_data();
+ok('an unknown address reports exists=false', $miss['exists'] === false);
+ok('...with no user attached', $miss['user'] === null);
+
+// This one returns a WP_Error rather than a response, so it is not unwrapped.
+$blank = deheled_um_rest_user_lookup(new WP_REST_Request('GET', '/de/v2/users/lookup'));
+ok('lookup with no arguments is a bad request', is_wp_error($blank));
+
+echo "\n=== the read routes are scope-gated ===\n";
+update_option(DEHELED_UM_SCOPES, array('users:write'), 'no');
+foreach (array('/de/v2/roles', '/de/v2/users', '/de/v2/users/lookup') as $route) {
+    $denied = deheled_um_verify_request(live_signed_request('GET', $route), 'users:read');
+    ok("$route is refused without users:read",
+        is_wp_error($denied) && $denied->get_error_data()['de_code'] === 'scope_denied');
+}
+update_option(DEHELED_UM_SCOPES, deheled_um_default_scopes(), 'no');
+
+echo "\n=== capabilities now advertises the read path ===\n";
+$caps_now = deheled_um_rest_capabilities(new WP_REST_Request('GET', '/de/v2/capabilities'))->get_data();
+ok('users.read is advertised', in_array('users.read', $caps_now['capabilities'], true));
+ok('users.write is NOT advertised yet', !in_array('users.write', $caps_now['capabilities'], true));
 
 echo "\n" . ($fail ? "FAILED — $fail check(s) failed\n" : "OK — all checks passed\n");
 exit($fail ? 1 : 0);
