@@ -4,7 +4,7 @@
 // Deliberately free of database access — every function under test is pure, so
 // this suite runs on a bare checkout exactly like the rest of tests/.
 
-import { permsFor } from "../src/auth.js";
+import { permsFor, requireAuth } from "../src/auth.js";
 import { _setGrantsForTest, isWpUserManager } from "../src/usermgmt/grants.js";
 import {
   CORE_ROLES, isCoreRole, isAdminLikeRole, normalizeRoleSlug, assertDefaultRole, roleName,
@@ -47,6 +47,60 @@ console.log("\n--- an empty grant list never widens access ---");
 _setGrantsForTest([]);
 ok("nobody is granted when the list is empty", isWpUserManager("jeff@digitalelementsgroup.com") === false);
 ok("admins still hold it by role", permsFor("admin", "someone@digitalelementsgroup.com").manageWpUsers === true);
+
+console.log("\n--- the seeded grant list, per person ---");
+// Exactly what migration 002 seeds.
+_setGrantsForTest([
+  "ryan@digitalelementsgroup.com",
+  "danny@digitalelementsgroup.com",
+  "jeff@digitalelementsgroup.com",
+]);
+for (const email of ["ryan@digitalelementsgroup.com", "danny@digitalelementsgroup.com", "jeff@digitalelementsgroup.com"]) {
+  ok(`${email} holds manageWpUsers as admin`, permsFor("admin", email).manageWpUsers === true);
+}
+// jeff is an admin today, but the explicit grant is what guarantees access if
+// that ever changes — which is the point of listing him.
+ok("jeff keeps the grant even without the admin role", permsFor("webdev", "jeff@digitalelementsgroup.com").manageWpUsers === true);
+ok("...without gaining anything else", permsFor("webdev", "jeff@digitalelementsgroup.com").manageUsers === false);
+for (const email of ["jason@digitalelementsgroup.com", "ggardner@digitalelementsgroup.com", "regan@digitalelementsgroup.com"]) {
+  ok(`${email} does not hold it`, permsFor("seo", email).manageWpUsers === false);
+}
+
+console.log("\n--- an expired session on an API route answers with JSON, not a redirect ---");
+// requireAuth is mounted both directly on routes and via app.use() on the
+// /api/wpusers router, where req.path is relative to the mount point. Both must
+// produce a 401 the dashboard's fetch wrappers can act on.
+function fakeRes() {
+  return {
+    statusCode: null, body: null, redirected: null,
+    status(code) { this.statusCode = code; return this; },
+    json(payload) { this.body = payload; return this; },
+    redirect(to) { this.redirected = to; return this; },
+  };
+}
+const signedOut = { isAuthenticated: () => false };
+
+let res = fakeRes();
+requireAuth({ ...signedOut, path: "/api/users", originalUrl: "/api/users" }, res, () => {});
+eq("top-level API route still returns 401", res.statusCode, 401);
+
+res = fakeRes();
+requireAuth({ ...signedOut, path: "/teams", originalUrl: "/api/wpusers/teams" }, res, () => {});
+eq("mounted API route returns 401, not a redirect", res.statusCode, 401);
+ok("...and does not redirect", res.redirected === null);
+
+res = fakeRes();
+requireAuth({ ...signedOut, path: "/api/users", originalUrl: "/api/users?role=admin" }, res, () => {});
+eq("a query string doesn't break the check", res.statusCode, 401);
+
+res = fakeRes();
+requireAuth({ ...signedOut, path: "/", originalUrl: "/" }, res, () => {});
+eq("a page request still redirects to the login screen", res.redirected, "/login");
+ok("...with no status set", res.statusCode === null);
+
+let reached = false;
+requireAuth({ isAuthenticated: () => true, path: "/api/users", originalUrl: "/api/users" }, fakeRes(), () => { reached = true; });
+ok("a signed-in user passes through", reached);
 
 console.log("\n--- WordPress role vocabulary ---");
 eq("five core roles", CORE_ROLES.length, 5);
