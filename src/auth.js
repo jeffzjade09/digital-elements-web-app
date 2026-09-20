@@ -116,7 +116,14 @@ export function configureAuth(app, settings) {
 // ---- Middleware ----
 export function requireAuth(req, res, next) {
   if (req.isAuthenticated && req.isAuthenticated()) return next();
-  if (req.path.startsWith("/api/")) return res.status(401).json({ ok: false, error: "Not signed in" });
+  // originalUrl, not path: inside a router mounted with app.use("/api/...", ...)
+  // req.path is relative to the mount point, so an expired session on an API
+  // route would get an HTML redirect instead of the JSON 401 the dashboard's
+  // fetch wrappers key off. originalUrl is the same as path for the top-level
+  // routes, so their behaviour is unchanged.
+  if ((req.originalUrl || req.path).startsWith("/api/")) {
+    return res.status(401).json({ ok: false, error: "Not signed in" });
+  }
   return res.redirect("/login");
 }
 
