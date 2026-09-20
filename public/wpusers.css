@@ -1,0 +1,78 @@
+/* Centralized WordPress user management.
+   Kept out of index.html's <style> block because that file is already ~2,400
+   lines; everything here reuses the dashboard's existing custom properties so
+   both themes come along for free. */
+
+.wpu-tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+.wpu-tab { background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; padding: 9px 14px; margin-bottom: -1px; cursor: pointer; border-radius: 8px 8px 0 0; transition: color .12s, border-color .12s, background .12s; }
+.wpu-tab:hover { color: var(--text); background: var(--panel-2); }
+.wpu-tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+
+.wpu-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+.wpu-bar .grow { flex: 1; min-width: 180px; }
+.wpu-bar input, .wpu-bar select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; color: var(--text); padding: 9px 11px; font-size: 13px; font-family: inherit; }
+.wpu-bar input:focus, .wpu-bar select:focus { outline: none; border-color: var(--accent); }
+
+.wpu-card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); overflow: hidden; }
+.wpu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.wpu-table th { text-align: left; font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); padding: 10px 12px; border-bottom: 1px solid var(--line); font-weight: 500; white-space: nowrap; }
+.wpu-table td { padding: 11px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+.wpu-table tbody tr:last-child td { border-bottom: none; }
+.wpu-table tbody tr:hover { background: var(--panel-2); }
+.wpu-table .wpu-name { font-weight: 600; }
+.wpu-table .wpu-sub { display: block; color: var(--muted); font-size: 11.5px; font-family: var(--mono); margin-top: 2px; word-break: break-all; }
+.wpu-table td.wpu-actions { text-align: right; white-space: nowrap; }
+
+.wpu-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+.wpu-chip.role { font-family: var(--mono); font-size: 11px; text-transform: lowercase; }
+.wpu-chip.role.admin-like { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.wpu-chip.inherited { opacity: .75; font-style: italic; }
+.wpu-chip.team { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.wpu-chip.none { color: var(--faint); }
+.wpu-chip.ext { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.wpu-chip.disabled { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 40%, transparent); }
+
+.wpu-linkbtn { background: none; border: none; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.wpu-linkbtn:hover { color: var(--text); background: var(--panel-2); }
+.wpu-linkbtn.danger:hover { color: var(--fail); }
+
+.wpu-empty { padding: 44px 20px; text-align: center; color: var(--muted); }
+.wpu-empty h4 { font-family: var(--display); font-size: 15px; color: var(--text); margin: 0 0 6px; }
+.wpu-note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.wpu-msg { font-size: 12.5px; font-weight: 600; min-height: 17px; }
+.wpu-msg.err { color: var(--err-text); }
+.wpu-msg.ok { color: var(--note-text); }
+
+/* Selection toolbar for bulk team moves */
+.wpu-selbar { display: none; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
+.wpu-selbar.show { display: flex; }
+.wpu-selbar .count { font-weight: 700; }
+.wpu-selbar select { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 7px 9px; font-size: 12.5px; }
+
+/* Form fields inside the modals this view opens */
+.wpu-field { margin-bottom: 14px; }
+.wpu-field label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.wpu-field input, .wpu-field select, .wpu-field textarea { width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; color: var(--text); padding: 10px 12px; font-size: 13px; font-family: inherit; }
+.wpu-field input:focus, .wpu-field select:focus, .wpu-field textarea:focus { outline: none; border-color: var(--accent); }
+.wpu-field .hint { font-size: 11.5px; color: var(--faint); margin-top: 5px; line-height: 1.5; }
+.wpu-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* Destructive / sensitive confirmation */
+.wpu-danger { background: color-mix(in srgb, var(--fail) 9%, transparent); border: 1px solid color-mix(in srgb, var(--fail) 35%, transparent); border-radius: 11px; padding: 13px 15px; margin-bottom: 14px; font-size: 12.5px; line-height: 1.55; }
+.wpu-danger strong { color: var(--fail); }
+.wpu-warnbox { background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 38%, transparent); border-radius: 11px; padding: 13px 15px; margin-bottom: 14px; font-size: 12.5px; line-height: 1.55; }
+.wpu-check { display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px; line-height: 1.5; cursor: pointer; }
+.wpu-check input { width: auto; margin-top: 2px; flex: none; }
+
+.wpu-audit-act { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
+.wpu-audit-when { font-family: var(--mono); font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .wpu-row2 { grid-template-columns: 1fr; }
+  .wpu-table thead { display: none; }
+  .wpu-table tbody tr { display: block; border-bottom: 1px solid var(--line); padding: 10px 4px; }
+  .wpu-table td { display: flex; justify-content: space-between; gap: 12px; border: none; padding: 5px 12px; }
+  .wpu-table td::before { content: attr(data-label); color: var(--faint); font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; }
+  .wpu-table td.wpu-actions { justify-content: flex-end; }
+  .wpu-table td.wpu-actions::before { content: ""; }
+}

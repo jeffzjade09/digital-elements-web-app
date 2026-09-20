@@ -28,6 +28,9 @@ import {
 import { configureAuth, requireAuth, requirePerm, sameOriginOnly, permsFor } from "./auth.js";
 import { rateLimit } from "./rateLimit.js";
 import { buildImageReport } from "./imageReport.js";
+import { runMigrations } from "./migrate.js";
+import { loadGrants, startGrantRefresh } from "./usermgmt/grants.js";
+import wpUsersRouter from "./routes/wpusers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, "..", "public");
@@ -144,8 +147,14 @@ app.get("/", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "index.ht
 // Website detail dashboard — same SPA, routed client-side.
 app.get("/websites/:id", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "index.html")));
 
+// The user-management UI's own assets. There is no static middleware in this
+// app — every file is served by an explicit route — so these need one too.
+// Behind requireAuth to match the page that loads them.
+app.get("/wpusers.js", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "wpusers.js")));
+app.get("/wpusers.css", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC, "wpusers.css")));
+
 app.get("/api/me", requireAuth, (req, res) => {
-  res.json({ ok: true, user: { email: req.user.email, name: req.user.name, role: req.user.role, theme: req.user.theme || "dark" }, perms: permsFor(req.user.role) });
+  res.json({ ok: true, user: { email: req.user.email, name: req.user.name, role: req.user.role, theme: req.user.theme || "dark" }, perms: permsFor(req.user.role, req.user.email) });
 });
 
 // Personal preferences — any signed-in user can change their own (unlike /api/settings).
@@ -572,6 +581,19 @@ app.delete("/api/landing/:id", requireAuth, requirePerm("manageWebsites"), async
   catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
+// ---- Centralized WordPress user management ----
+// Auth, permission and rate limiting are applied once here rather than on each
+// of the router's ~15 routes. manageWpUsers is its own permission: it can
+// create and change real accounts on client sites, which is a far bigger
+// capability than the manageUsers dashboard allow-list it sits next to.
+app.use(
+  "/api/wpusers",
+  requireAuth,
+  requirePerm("manageWpUsers"),
+  rateLimit({ name: "wpusers", windowMs: 60_000, max: 120 }),
+  wpUsersRouter
+);
+
 // ---- Settings (admin only) ----
 function settingsView() {
   const results = loadResults();
@@ -613,6 +635,12 @@ app.put("/api/settings", requireAuth, requirePerm("manageSettings"), async (req,
 // ---- Start ----
 bootstrap()
   .then(async () => {
+    // Migrations run after bootstrap() so the tables they reference (app_users,
+    // websites, app_settings) are guaranteed to exist first. A failure here
+    // aborts boot rather than serving against a half-migrated schema.
+    await runMigrations();
+    await loadGrants();      // who holds manageWpUsers, beyond the admin role
+    startGrantRefresh();     // pick up changes without a restart
     try { applyStoredSettings(settings, await getAppSettings()); } catch (err) { console.error("[server] Could not load stored settings:", err.message); }
     await seedRequestMetrics(); // restore request-metric buckets from the DB
     // Cold start = the DATABASE has no sweep history (durable across redeploys),

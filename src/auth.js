@@ -8,18 +8,40 @@ import connectPgSimple from "connect-pg-simple";
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { getPool, getUserByEmail, getUserById, touchLogin } from "./db.js";
+import { isWpUserManager } from "./usermgmt/grants.js";
 
 // Permission model. Keep this as the single source of truth.
+//
+// manageUsers governs the dashboard sign-in allow-list (app_users). It is NOT
+// the same thing as manageWpUsers, which governs creating and changing real
+// WordPress accounts on client sites — a far more dangerous capability, so it
+// gets its own permission and its own explicit grant list rather than riding
+// along with an existing one.
 const PERMISSIONS = {
-  admin:     { manageWebsites: true,  deleteWebsite: true,  manageUsers: true,  editSocial: true,  manageSettings: true },
-  webdev:    { manageWebsites: true,  deleteWebsite: false, manageUsers: false, editSocial: true,  manageSettings: false },
-  social:    { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: true,  manageSettings: false },
-  seo:       { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: false, manageSettings: false },
-  publisher: { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: false, manageSettings: false },
+  admin:     { manageWebsites: true,  deleteWebsite: true,  manageUsers: true,  editSocial: true,  manageSettings: true,  manageWpUsers: true  },
+  webdev:    { manageWebsites: true,  deleteWebsite: false, manageUsers: false, editSocial: true,  manageSettings: false, manageWpUsers: false },
+  social:    { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: true,  manageSettings: false, manageWpUsers: false },
+  seo:       { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: false, manageSettings: false, manageWpUsers: false },
+  publisher: { manageWebsites: false, deleteWebsite: false, manageUsers: false, editSocial: false, manageSettings: false, manageWpUsers: false },
 };
 
-export function permsFor(role) {
-  return PERMISSIONS[role] || PERMISSIONS.seo;
+// Permissions that can additionally be granted per-email, independently of the
+// dashboard role. Keeping this explicit means a future per-email grant can't be
+// bolted onto a permission that was never designed to be handed out that way.
+const EMAIL_GRANTABLE = {
+  manageWpUsers: isWpUserManager,
+};
+
+// `email` is optional so existing callers that only know the role keep working;
+// they simply don't see the per-email grants.
+export function permsFor(role, email) {
+  const base = PERMISSIONS[role] || PERMISSIONS.seo;
+  if (!email) return base;
+  let out = base;
+  for (const [perm, granted] of Object.entries(EMAIL_GRANTABLE)) {
+    if (!out[perm] && granted(email)) out = { ...out, [perm]: true };
+  }
+  return out;
 }
 
 export function configureAuth(app, settings) {
@@ -94,7 +116,14 @@ export function configureAuth(app, settings) {
 // ---- Middleware ----
 export function requireAuth(req, res, next) {
   if (req.isAuthenticated && req.isAuthenticated()) return next();
-  if (req.path.startsWith("/api/")) return res.status(401).json({ ok: false, error: "Not signed in" });
+  // originalUrl, not path: inside a router mounted with app.use("/api/...", ...)
+  // req.path is relative to the mount point, so an expired session on an API
+  // route would get an HTML redirect instead of the JSON 401 the dashboard's
+  // fetch wrappers key off. originalUrl is the same as path for the top-level
+  // routes, so their behaviour is unchanged.
+  if ((req.originalUrl || req.path).startsWith("/api/")) {
+    return res.status(401).json({ ok: false, error: "Not signed in" });
+  }
   return res.redirect("/login");
 }
 
@@ -103,7 +132,7 @@ export function requirePerm(perm) {
     if (!(req.isAuthenticated && req.isAuthenticated())) {
       return res.status(401).json({ ok: false, error: "Not signed in" });
     }
-    if (permsFor(req.user.role)[perm]) return next();
+    if (permsFor(req.user.role, req.user.email)[perm]) return next();
     return res.status(403).json({ ok: false, error: "You don't have permission for this action" });
   };
 }
