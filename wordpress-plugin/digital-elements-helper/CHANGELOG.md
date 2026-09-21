@@ -1,5 +1,59 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.7.0 — Team Members
+
+Adds **DE Monitoring → Team Members**, so a member of Digital Elements staff
+already working in your WP Admin can add a colleague to this site without
+anyone switching to the Digital Elements dashboard.
+
+**Installing this update changes nothing on your site by itself.** The screen is
+dormant until every condition below is met, and it is invisible to your own
+administrators.
+
+### Who can see it
+
+All four, checked on the server every time — not by hiding a menu:
+
+1. this site's Digital Elements license is present, verified and unexpired;
+2. user management is connected here, this site has allowed account changes,
+   and Digital Elements permits this site to add staff;
+3. the logged-in user can edit users **and** assign roles on this site;
+4. the logged-in user is a Digital Elements account (created by Digital
+   Elements, on the digitalelementsgroup.com domain).
+
+Condition 4 is why **your own administrators never see this screen**, even
+though they hold every capability on the site. It is for our staff working
+here, not for the site's owners, and it is not something the site can turn on
+for itself.
+
+If any condition isn't met the screen says which one, and offers nothing else.
+If the Digital Elements dashboard can't be reached, the screen says so rather
+than half-working.
+
+### What it does, and doesn't
+
+Adds existing Digital Elements staff to **this** site, with the role Digital
+Elements has set for them, which can be lowered but never raised above the
+level of whoever is using the screen.
+
+The plugin does **not** create the account itself. It asks the Digital Elements
+dashboard, which creates it through exactly the same path it has always used —
+the same checks, the same activity log, and the same "set your password" email
+WordPress sends. Passwords are never displayed, stored, logged or transmitted.
+
+It cannot edit or delete anyone, cannot change roles in bulk, cannot see or
+touch any other website, and never acts on an account Digital Elements didn't
+create.
+
+Retrying a failed run is safe: it resumes the same job rather than adding
+everybody a second time.
+
+### For site administrators
+
+Nothing here changes what this site has already allowed under **DE Monitoring →
+User management**. Turning off user management there, or disconnecting the
+site, removes this screen too.
+
 ## 2.6.1
 
 - The capabilities endpoint now reports which website in the Digital Elements

@@ -509,11 +509,28 @@ content and its access** — we simply stop managing it. Deleting an account nee
 the content-ownership checks from the next phase; offering deletion without them
 is how content gets orphaned, so the route refuses `deleteAccounts` outright.
 
-## Adding staff from inside a client's WP Admin
+## The Team Members panel
+
+*Helper plugin 2.7.0 and later.*
 
 A member of staff already working in a client's WP Admin can add colleagues to
 **that** site without switching to the dashboard: **DE Monitoring → Team
 Members**.
+
+### What it does
+
+Shows the agency roster, grouped by team, with each person's default role for
+this site and whether they are already here. Pick people, press **Review** to
+see what will happen to each one, confirm, and the work runs in the background
+with a progress list.
+
+It is a view onto the dashboard plus **one action**. It does not create staff
+records, edit teams, change roles in bulk, or delete anything — the dashboard
+stays the single source of truth for all of that.
+
+**On any site, it is dormant until every gate passes**, and a client's own
+administrator never sees it at all. Installing 2.7.0 changes nothing on a site
+by itself.
 
 ### The plugin never creates anyone
 
@@ -557,6 +574,18 @@ them apart means the persist path *cannot* touch the hub's column.
 `plugin:assign` is granted at enrollment and revocable per site from the
 Websites tab ("We allow"). Sites enrolled before 2.7.0 are backfilled by
 migration 007, so nothing needs re-enrolling.
+
+**To switch the panel off for one site:** Settings → WP Users → Websites → that
+site → clear **"Plugin can add staff"** in the *We allow* column. The next `/roster`
+call reports `canAssign: false` and the screen changes to *"Not permitted from
+here"* within the five-minute cache — and an assignment sent in the meantime is
+refused by the hub with `scope_denied`, because the scope is checked per
+request, not at page load. Nothing already on the site is touched: revoking
+stops new assignments from that site, it does not remove anyone.
+
+The site cannot grant this to itself. `plugin:assign` lives in `um_hub_scopes`,
+the plugin never reports it, and `setHubScopes()` refuses any scope that isn't
+hub-controlled.
 
 ### What a compromised site could do
 
