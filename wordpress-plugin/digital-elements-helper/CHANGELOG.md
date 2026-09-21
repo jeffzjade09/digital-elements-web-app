@@ -1,5 +1,50 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.7.3 — Invitations you can see
+
+When Digital Elements adds a colleague to your website, WordPress emails them a
+link to set their own password. Until now nothing showed whether that email
+arrived or whether anyone used it — an account could sit unusable for weeks with
+no sign of it anywhere.
+
+### What you'll see
+
+Team Members now shows, for each colleague already on this website:
+
+- **Waiting for them to set a password** — invited, link not used yet
+- **Email couldn't be delivered — resend** — this website couldn't send it
+- **Active** — they've set their own password
+- **Not invited by us** — an account this website already had
+
+**Resend invitation** appears where it applies. It asks WordPress to email a
+fresh link, exactly as the Lost Password form does. Any earlier link stops
+working at that moment — that is WordPress's own behaviour, not something added
+here. You can resend up to three times an hour per person.
+
+Accounts this website already had don't get a Resend button, and the screen says
+why rather than leaving a gap: they can use "Lost your password?" on the login
+page, like any other account here.
+
+### About passwords
+
+Nothing changed, and it is worth stating plainly:
+
+- The password set when an account is created is random, used once, and **never
+  shown, stored, logged or sent anywhere** — not to Digital Elements, not in any
+  report, not even when the email fails.
+- The reset link is generated and emailed by **WordPress**, from this website,
+  to the person's own address. Digital Elements never sees it.
+- Nobody can sign in to a new account before setting their own password, because
+  there is no password anyone knows.
+
+### Also
+
+- The plugin now records when someone completes a password reset, so "Active"
+  reflects something observed rather than guessed. Where it has to be inferred
+  from an older account, the screen says so when you hover.
+- Whether a set-password link is outstanding is reported to the dashboard as a
+  yes/no. **The link and its key never leave this website.**
+
 ## 2.7.2 — Team Members shows what is really on this website
 
 ### What was wrong
