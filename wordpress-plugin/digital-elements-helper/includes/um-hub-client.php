@@ -189,11 +189,37 @@ function deheled_hub_get_roster($force = false) {
         if (is_array($cached)) return $cached;
     }
 
+    // 25s rather than 15: this one call now makes the dashboard probe this
+    // site's capabilities, read its roles, and — on a first visit — adopt the
+    // caller's account, each of which is a round trip back here. It is the
+    // slowest request this plugin makes, and timing it out shows the panel as
+    // "can't reach Digital Elements" when the dashboard was simply working.
     $roster = deheled_hub_request('POST', '/roster', array(
         'body'    => deheled_hub_actor_fields(),
-        'timeout' => 15,
+        'timeout' => 25,
     ));
     if (is_wp_error($roster)) return $roster;
+
+    // Tell the dashboard who is ACTUALLY on this site -- but only when what we
+    // can see differs from what it just told us.
+    //
+    // The panel itself never needed this: it reads the WordPress user table
+    // directly, so it is right on the first load either way. This is for the
+    // DASHBOARD's rows, which is where the wrong answer lived. Sending it costs
+    // a second request, so it is sent only when there is something to correct,
+    // which on a site in step is never.
+    $observed = deheled_site_users_observed($roster);
+    $drifted = false;
+    foreach ($observed as $o) {
+        if (!empty($o['drifted'])) { $drifted = true; break; }
+    }
+    if ($drifted) {
+        $reconciled = deheled_hub_request('POST', '/roster', array(
+            'body'    => array_merge(deheled_hub_actor_fields(), array('observed' => $observed)),
+            'timeout' => 20,
+        ));
+        if (!is_wp_error($reconciled)) $roster = $reconciled;
+    }
 
     // Not cached when the hub has just adopted this account: the very next
     // request should report the account as managed, and a five-minute cache of

@@ -837,6 +837,123 @@ keep their role, content and access; we stop administering them. Folding account
 deletion into a team delete would be the most dangerous shortcut in this
 feature, so the return value states `deletesWordPressAccounts: false` explicitly.
 
+## Reconciliation — the site is the authority
+
+An assignment row used to be written when we acted and never read again. Two
+accounts were deleted directly in WP Admin on Dev Digital Element; the rows
+still said `synced`, so the Team Members panel reported *"everyone is already
+here"* while the site had one user. The dashboard's picture of a site was a
+belief nothing ever re-verified — the same shape of bug as #16, where a probe
+reported scopes that were never persisted.
+
+**The site is the authority on who exists there.** Everything below exists to
+make our rows agree with it.
+
+### Read-only with respect to WordPress
+
+Reconciliation may update hub rows and write audit entries. **It never creates a
+user, deletes one, changes a role, links or unlinks.** Two reasons, and both
+matter more than the convenience of self-healing:
+
+- somebody removed that account on purpose. A dashboard that quietly put it back
+  would be arguing with the person who did it.
+- it runs unattended, on a schedule, across every site. Anything it can do to a
+  client site it can do to forty of them at 3am with nobody watching.
+
+The only call it makes is `GET /users/lookup`. A test asserts that no write verb
+and no other route appears anywhere in `reconcile.js`, because a behavioural test
+only covers the paths it happens to walk.
+
+### The transitions
+
+| What the site says | What happens |
+|---|---|
+| present, same role | nothing, beyond stamping it as checked |
+| present, different role | the site's role is **adopted**, `drift = role_changed_externally`, audited |
+| present, not `_de_managed` | `drift = unmanaged_externally`, audited |
+| **absent** | `state = removed_externally`, audited. **The row is kept and the user is never recreated.** |
+| we couldn't ask | **nothing at all** |
+
+That last row is the one worth dwelling on. A failed lookup is *not* an
+observation: a site down for an hour must never read as a site with nobody on
+it. `decide()` returns no change when the observation is missing.
+
+`state` still means what it always meant — how the last *operation* went — which
+is why a role someone else changed is recorded as **drift** in its own column
+rather than overwriting it. Absence is different: it really is a state, because
+nothing about the last operation is true of an account that no longer exists.
+
+Once recorded, `role_changed_externally` is **not** cleared by a later matching
+observation. We adopted the site's role when we noticed, so every later look
+matches by construction, and clearing on a match would erase "somebody changed
+this" on the very next pass. It clears when the dashboard next sets that
+person's role — the moment the difference actually stops being true.
+
+### Three ways it runs
+
+1. **The plugin reports.** The Team Members panel computes every member's
+   presence from the site's own user table (`get_user_by('email')`), not from
+   the dashboard's answer, so the panel is right on the first load regardless.
+   When what it sees disagrees with what the hub just said, it posts those
+   observations back on `/roster`. One extra request, only when there is
+   something to correct — on a site in step, never.
+2. **Re-check.** Per-site and "Re-check all" reconcile every ready site, one
+   signed `/users/lookup` per assigned person (the endpoint takes a single
+   address; there is no batch), under `USER_SYNC_CONCURRENCY`. Only on an
+   explicit refresh — nobody asked for that traffic by opening a tab.
+3. **The sweep.** The same pass runs after each scheduled monitoring sweep, for
+   every ready site, so drift is found without waiting for anyone to open a
+   panel. It can never fail the sweep; monitoring is the sweep's job and this is
+   a passenger.
+
+Drift is **surfaced, not just corrected**: Sync status shows per-site counts
+("2 removed outside the dashboard") and when the site was last checked. A silent
+fix leaves someone wondering why the list changed.
+
+## One website per URL
+
+Two `websites` rows carried `https://digitalelementsgroup.com/` — one enrolled
+with all the monitoring history, one added later and never enrolled — so the
+picker showed the same site twice, one *Ready* and one *Update required*.
+Nothing prevented it: there was no uniqueness on `url` and no normalisation
+anywhere.
+
+**The definition of "the same URL"**, in one place and mirrored on both sides:
+
+> lowercase, drop the scheme, drop a leading `www.`, drop any query or fragment,
+> drop the trailing slash.
+
+```
+https://WWW.Example.com/    ->  example.com
+http://example.com          ->  example.com
+https://example.com/blog/   ->  example.com/blog
+```
+
+`de_normalize_url()` in SQL (indexed, `immutable`) and `normalizeWebsiteUrl()`
+in `src/db.js`. A test asserts the two agree against real values rather than
+trusting them to — if they drift, the unique index stops meaning what the code
+thinks it means.
+
+### Archived, not deleted
+
+Migration 008 resolves existing duplicates by **archiving** the loser, choosing
+the keeper by rule — enrolled first, then the one with the most monitoring
+history, then the oldest. Monitoring telemetry (`metric_samples`,
+`status_events`) moves to the keeper so the history stays whole; anything whose
+meaning depends on which row it was recorded against is left alone. If a
+duplicate has assignments or an enrollment, the migration **refuses to run** and
+says so: that is not the abandoned row this was written for, and a person should
+decide.
+
+An archived website is excluded from the website list, the scheduler, Sync
+status, licence validation, and **site-API credential resolution** — an archived
+site cannot call `/api/site/v1` even though archiving deletes nothing and leaves
+its credential in place. `getAllWebsitesIncludingArchived()` is the deliberate
+exception.
+
+The unique index is **partial** (`where not archived`), so an archived row keeps
+the URL it was created with instead of having its data edited to make room.
+
 ## The activity log
 
 Every administrative change: who did it, what changed, on which site, and the
@@ -892,6 +1009,10 @@ independence, and the team-delete disposition.
 authorities.
 `tests/usermgmt-site-api.test.mjs` covers the site API's identification,
 tenancy and response envelope.
+`tests/usermgmt-reconcile.test.mjs` covers every reconciliation transition, that
+a failed lookup is never read as absence, that a removed account is never
+recreated, the audit rows, idempotent re-runs, and that SQL and JS agree on what
+"the same URL" means.
 `tests/usermgmt-actor.test.mjs` covers who may drive the panel: the exact-domain
 matcher, the allowed-team constant, roster resolution, and that every route
 refuses a disallowed team, an omitted actor and an invented colleague — plus

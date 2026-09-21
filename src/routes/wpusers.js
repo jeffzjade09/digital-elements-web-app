@@ -23,6 +23,7 @@ import { getSiteRoles } from "../usermgmt/roles.js";
 import { runPreflight } from "../usermgmt/preflight.js";
 import { startAssignment, startRemoval, startDeletion, getJob, retryJob } from "../usermgmt/sync.js";
 import { getContentOwnership, reassignContent, planDeletion } from "../usermgmt/contentOwnership.js";
+import { reconcileAll, reconcileSite, driftSummary } from "../usermgmt/reconcile.js";
 import { getWebsites, getWebsiteSite, query } from "../db.js";
 
 export const router = express.Router();
@@ -248,7 +249,20 @@ router.get("/websites", asyncRoute(async (req, res) => {
   const sites = await getWebsites();
   const force = req.query.refresh === "1";
   const caps = await getCapabilitiesForAll(sites, { force });
-  res.json({ ok: true, configured: true, requiredApiVersion: REQUIRED_API_VERSION, websites: caps });
+
+  // Only on an explicit re-check, not on every page load: this is one signed
+  // request per assigned person per site, and nobody asked for that by opening
+  // a tab.
+  let reconciled = null;
+  if (force) {
+    const ready = new Set(caps.filter((c) => c.readiness === READINESS.READY).map((c) => c.websiteId));
+    reconciled = await reconcileAll(sites, {
+      actor: { actorUserId: req.user?.id, actorEmail: req.user?.email, via: "recheck" },
+      isReady: (site) => ready.has(site.id),
+    });
+  }
+
+  res.json({ ok: true, configured: true, requiredApiVersion: REQUIRED_API_VERSION, websites: caps, reconciled });
 }));
 
 router.get("/websites/:id/capabilities", asyncRoute(async (req, res) => {
@@ -337,7 +351,17 @@ router.post("/websites/:id/revoke-credential", asyncRoute(async (req, res) => {
     ...audit.actorFrom(req),
     action: "site.credential_revoked", entityType: "website", entityId: site.id, websiteId: site.id,
   });
-  res.json({ ok: true, capabilities: await getCapabilities(site, { force: true }) });
+  const capabilities = await getCapabilities(site, { force: true });
+  // A re-check that only asked "can we reach you" left the dashboard believing
+  // in accounts that had been deleted in WP Admin months earlier. Now it also
+  // asks who is actually there.
+  let reconciled = null;
+  if (capabilities.readiness === READINESS.READY) {
+    try {
+      reconciled = await reconcileSite(site, { actor: { actorUserId: req.user?.id, actorEmail: req.user?.email, via: "recheck" } });
+    } catch (err) { console.error(`[reconcile] ${site.name}: ${err.message}`); }
+  }
+  res.json({ ok: true, capabilities, reconciled });
 }));
 
 /**
@@ -705,9 +729,14 @@ router.get("/sync-status", asyncRoute(async (req, res) => {
       order by at desc limit 20`
   );
 
+  const drift = await driftSummary();
+
   const withCounts = caps.map((c) => ({
     ...c,
     assignments: byWebsite.get(c.websiteId) || {},
+    // Surfaced, not just corrected. A silent fix leaves someone wondering why
+    // the list changed; a count says what happened and lets them go and look.
+    drift: drift.get(c.websiteId) || { removedExternally: 0, roleChanged: 0, unmanaged: 0, lastReconciledAt: null },
     // Distinguishes "hasn't updated yet" from "can't be reached to find out",
     // which need completely different follow-up.
     needsPluginUpdate: c.readiness === READINESS.PLUGIN_UPDATE_REQUIRED,

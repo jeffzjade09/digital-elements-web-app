@@ -81,6 +81,18 @@ export async function runOnce(settings, { alert = false } = {}) {
     }
     console.log(`[scheduler] Sweep done: ${sites.length} sites, ${fresh.sweep.requests ?? "?"} outbound requests, ${Math.round(fresh.sweep.durationMs / 1000)}s`);
     persistRequestMetrics();
+
+    // Ask every ready site who is actually on it.
+    //
+    // Deliberately here and not only on a button: the accounts that started
+    // this were deleted in WP Admin and sat wrong in the dashboard for weeks
+    // because nothing ever asked again. Drift is found by looking, and nobody
+    // looks on a schedule except this.
+    //
+    // Never allowed to fail the sweep — monitoring is the sweep's job, and this
+    // is a passenger.
+    reconcileAfterSweep().catch((err) => console.error("[reconcile] sweep pass failed:", err.message));
+
     return fresh;
   } finally {
     isRunning = false;
@@ -89,6 +101,40 @@ export async function runOnce(settings, { alert = false } = {}) {
 
 export function isCheckRunning() {
   return isRunning;
+}
+
+/**
+ * The scheduled reconciliation pass.
+ *
+ * Imported lazily so the scheduler keeps working on a dashboard where user
+ * management isn't configured — there, getCapabilitiesForAll has nothing to
+ * say and this does nothing at all.
+ */
+async function reconcileAfterSweep() {
+  const credentials = await import("./usermgmt/credentials.js");
+  if (!credentials.isConfigured()) return;
+
+  const { getWebsites } = await import("./db.js");
+  const { getCapabilitiesForAll, READINESS } = await import("./usermgmt/capabilities.js");
+  const { reconcileAll } = await import("./usermgmt/reconcile.js");
+
+  const sites = await getWebsites();
+  // Cached readiness: this runs right after a sweep, and re-probing every site
+  // again would double the outbound traffic for nothing.
+  const caps = await getCapabilitiesForAll(sites, { force: false });
+  const ready = new Set(caps.filter((c) => c.readiness === READINESS.READY).map((c) => c.websiteId));
+  if (!ready.size) return;
+
+  const { totals } = await reconcileAll(sites, {
+    actor: { actorEmail: null, via: "sweep" },
+    isReady: (site) => ready.has(site.id),
+  });
+
+  // Logged only when something moved, so a quiet estate stays quiet in the log.
+  if (totals.removedExternally || totals.roleChanged || totals.unmanaged || totals.resolved) {
+    console.log(`[reconcile] ${totals.checked} checked: ${totals.removedExternally} removed outside the dashboard, `
+      + `${totals.roleChanged} role changed, ${totals.unmanaged} no longer managed, ${totals.resolved} back in step`);
+  }
 }
 
 // Check a single site (used when a site is added/edited) and merge the result

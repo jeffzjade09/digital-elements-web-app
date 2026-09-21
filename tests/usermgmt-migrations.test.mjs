@@ -46,9 +46,21 @@ for (const bad of ["drop table", "drop column", "truncate", "drop database", "de
 // — but only ever additively. A drop or a type change on a live monitoring
 // table is what must not slip through.
 const alters = allSql.match(/alter table\s+\w+[^;]*/g) || [];
-ok("every alter is an additive add-column",
-   alters.every((a) => /add column if not exists/.test(a)),
-   alters.filter((a) => !/add column if not exists/.test(a)).join(" | "));
+// Two shapes are allowed. Adding a column, always. And replacing a CHECK
+// constraint on a table this feature owns, because widening the set of allowed
+// values — 'removed_externally' in 008 — cannot be expressed any other way.
+// Everything else, in particular dropping a column or changing a type, is what
+// this guard exists to catch.
+const OWNED = /alter table\s+(website_user_assignments|staff_users|teams|audit_log|user_sync_jobs|user_sync_operations)\b/;
+const allowed = (a) =>
+  /add column if not exists/.test(a) ||
+  (OWNED.test(a) && /(add|drop) constraint/.test(a));
+ok("every alter adds a column, or changes a constraint on a table this feature owns",
+   alters.every(allowed),
+   alters.filter((a) => !allowed(a)).join(" | "));
+ok("no alter drops a column or changes a type",
+   !alters.some((a) => /drop column|alter column\s+\w+\s+type|set data type/.test(a)),
+   alters.filter((a) => /drop column|alter column\s+\w+\s+type|set data type/.test(a)).join(" | "));
 ok("app_users and the metric tables are untouched",
    !/alter table\s+(app_users|metric_samples|request_metrics|status_events)\b/.test(allSql));
 

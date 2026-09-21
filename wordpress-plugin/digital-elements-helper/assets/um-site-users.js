@@ -71,10 +71,16 @@
         + (m.managed ? '' : '<span class="deheled-tm-chip warn">not managed by us</span>')
         + '</span></li>';
     }
+    // Not here. If the dashboard thought otherwise, say so rather than quietly
+    // showing a different list than it did last time: somebody removed this
+    // account in WP Admin, and the person reading this is probably the one
+    // wondering where it went.
     return '<li class="deheled-tm-member">'
       + '<label><input type="checkbox" data-id="' + esc(m.id) + '"' + (state.selected[m.id] ? ' checked' : '') + ' /> '
       + '<span class="deheled-tm-name">' + esc(m.label) + '<small>' + esc(m.email) + '</small></span></label>'
-      + '<span class="deheled-tm-badges"><span class="deheled-tm-chip">' + esc(m.role) + '</span></span>'
+      + '<span class="deheled-tm-badges">'
+      + (m.hubThought ? '<span class="deheled-tm-chip warn">removed on this website</span>' : '')
+      + '<span class="deheled-tm-chip">' + esc(m.role) + '</span></span>'
       + '</li>';
   }
 
@@ -93,7 +99,7 @@
         + '<h3>' + esc(t.name) + ' <span class="deheled-tm-count">' + t.members.length + '</span></h3>'
         + (addable.length
             ? '<button class="button" data-team="' + esc(t.id) + '">Add this team (' + addable.length + ')</button>'
-            : '<span class="description">Everyone is already here</span>')
+            : '<span class="description">Everyone on this team is already here</span>')
         + '</div>'
         + '<ul class="deheled-tm-members">' + t.members.map(memberRow).join('') + '</ul>'
         + '</div>';

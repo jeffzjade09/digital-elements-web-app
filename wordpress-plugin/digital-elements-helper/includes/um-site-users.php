@@ -348,6 +348,62 @@ function deheled_site_users_state_title($state) {
  * but what ends up in markup is this plugin's decision. Non-agency members are
  * dropped here as well as at the hub.
  */
+/**
+ * Whether one roster member actually has an account on THIS site, right now.
+ *
+ * Looked up in the WordPress user table rather than taken from the dashboard's
+ * answer. The dashboard records what it did when it acted; it cannot know that
+ * somebody deleted the account in WP Admin afterwards. Two accounts were
+ * deleted exactly that way and the panel went on saying "everyone is already
+ * here" while the site had one user.
+ *
+ * The site is the authority on who exists on the site. Matching is by email,
+ * case-insensitively, which is what get_user_by('email') already does.
+ */
+function deheled_site_users_observe($email) {
+    $user = is_email($email) ? get_user_by('email', $email) : false;
+    if (!$user) {
+        return array('present' => false, 'roles' => array(), 'managed' => false, 'wpUserId' => 0);
+    }
+    return array(
+        'present'  => true,
+        'roles'    => array_values(array_map('strval', (array) $user->roles)),
+        'managed'  => deheled_um_user_is_managed($user->ID),
+        'wpUserId' => (int) $user->ID,
+    );
+}
+
+/**
+ * What this site can see about every roster member, for the hub to reconcile.
+ *
+ * Costs nothing to produce — the panel had to look these up to render itself —
+ * and it covers every assignment at once, so the hub never has to ask the site
+ * person by person just to discover it is out of date. Sent back only when at
+ * least one entry disagrees with what the hub just said; see
+ * deheled_hub_get_roster().
+ */
+function deheled_site_users_observed($roster) {
+    $out = array();
+    if (!is_array($roster)) return $out;
+    foreach ((isset($roster['teams']) ? $roster['teams'] : array()) as $team) {
+        foreach ((isset($team['members']) ? $team['members'] : array()) as $m) {
+            if (empty($m['email'])) continue;
+            $seen = deheled_site_users_observe($m['email']);
+            $thought = !empty($m['onThisSite']['present']);
+            $thought_roles = isset($m['onThisSite']['roles']) ? array_map('strval', (array) $m['onThisSite']['roles']) : array();
+
+            // Whether this one disagrees with what the dashboard believes, so
+            // the caller can decide whether the correction is worth a request
+            // without working it out a second time.
+            $seen['drifted'] = ($seen['present'] !== $thought)
+                || ($seen['present'] && $thought_roles && array_slice($seen['roles'], 0, 1) !== array_slice($thought_roles, 0, 1));
+
+            $out[] = array_merge(array('email' => (string) $m['email']), $seen);
+        }
+    }
+    return $out;
+}
+
 function deheled_site_users_public_roster($roster) {
     if (!is_array($roster)) return array('teams' => array(), 'siteRoles' => array());
 
@@ -356,14 +412,19 @@ function deheled_site_users_public_roster($roster) {
         $members = array();
         foreach ((isset($team['members']) ? $team['members'] : array()) as $m) {
             if (!deheled_site_users_member_allowed($m)) continue;
+            // GROUND TRUTH, not the dashboard's belief. See above.
+            $seen = deheled_site_users_observe($m['email']);
             $members[] = array(
                 'id'      => (string) $m['staffUserId'],
                 'label'   => (string) $m['label'],
                 'email'   => (string) $m['email'],
                 'role'    => (string) $m['defaultWpRole'],
-                'present' => !empty($m['onThisSite']['present']),
-                'roles'   => isset($m['onThisSite']['roles']) ? array_values($m['onThisSite']['roles']) : array(),
-                'managed' => !empty($m['onThisSite']['managed']),
+                'present' => $seen['present'],
+                'roles'   => $seen['roles'],
+                'managed' => $seen['managed'],
+                // Kept so the panel can say "the dashboard thought this person
+                // was here" rather than silently showing a different list.
+                'hubThought' => !empty($m['onThisSite']['present']),
             );
         }
         if (!$members) continue;

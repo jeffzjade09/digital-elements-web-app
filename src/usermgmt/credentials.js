@@ -156,12 +156,18 @@ export async function getSiteByKeyId(keyId) {
   if (!keyId || typeof keyId !== "string") return null;
   const { rows } = await query(
     `select id, name, url, um_key_id, um_secret_enc, um_scopes, um_hub_scopes,
-            license_key, license_expires_at, helper_enabled
+            license_key, license_expires_at, helper_enabled, archived
        from websites where um_key_id = $1`,
     [keyId]
   );
   const row = rows[0];
   if (!row || !row.um_secret_enc) return null;
+  // An archived site is one we have stopped acting on. If it still holds a
+  // credential — nothing is deleted when a site is archived — it must not be
+  // able to use it: resolving to nothing here means every /api/site/v1 call it
+  // makes is refused exactly like an unknown key, with no separate path to get
+  // wrong and no way to tell the two apart from outside.
+  if (row.archived === true) return null;
   return row;
 }
 
