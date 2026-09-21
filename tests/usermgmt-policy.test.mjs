@@ -111,12 +111,28 @@ ok("junk is stripped from slugs", normalizeRoleSlug("edi<tor>") === "editor");
 ok("unknown slug is not a core role", isCoreRole("shop_manager") === false);
 eq("role names are readable", roleName("contributor"), "Contributor");
 
-console.log("\n--- default roles are least-privilege by construction ---");
+console.log("\n--- default roles ---");
 eq("editor is accepted", assertDefaultRole("editor"), "editor");
 eq("mixed case is accepted", assertDefaultRole("Subscriber"), "subscriber");
-throws("administrator is refused as a default", () => assertDefaultRole("administrator"), /per website/i);
-throws("an unknown role is refused", () => assertDefaultRole("shop_manager"), /not a valid WordPress role/i);
-throws("an empty role is refused", () => assertDefaultRole(""), /not a valid WordPress role/i);
+
+// POLICY: Administrator may be a team or per-user default. This agency
+// administers the sites it builds, so it is the ordinary working role. What
+// protects a client is not its absence from this list — it is the per-site
+// users:admin scope (which the dashboard cannot grant) and the confirmation
+// before a job runs. Both are asserted elsewhere in this suite and in
+// usermgmt-preflight.
+eq("administrator is accepted as a default", assertDefaultRole("administrator"), "administrator");
+
+throws("an unrecognised role is still refused", () => assertDefaultRole("shop_manager"), /isn't a WordPress role we've seen/i);
+throws("an empty role is still refused", () => assertDefaultRole(""), /isn't a WordPress role we've seen/i);
+
+// A role discovered on a connected site can be stored as a default; one we
+// have never seen anywhere cannot, so a typo still can't reach the database.
+const discovered = new Set(["administrator", "editor", "author", "contributor", "subscriber", "seo_editor", "seo_manager"]);
+eq("a discovered custom role is accepted", assertDefaultRole("seo_editor", discovered), "seo_editor");
+eq("...and another", assertDefaultRole("seo_manager", discovered), "seo_manager");
+throws("a role nobody has is still refused", () => assertDefaultRole("wizard", discovered), /isn't a WordPress role we've seen/i);
+eq("core roles remain valid alongside discovered ones", assertDefaultRole("editor", discovered), "editor");
 
 console.log("\n--- agency-domain restriction ---");
 eq("agency address passes", assertEmailAllowed("Jeff@DigitalElementsGroup.com"), "jeff@digitalelementsgroup.com");

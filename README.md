@@ -229,6 +229,12 @@ Setting it up:
 4. That site's administrator decides whether we may **delete users** or **grant
    Administrator**. Both are off by default and only they can turn them on.
 
+Administrator is a permitted team and per-user default — this agency administers
+the sites it builds. It stays gated by the per-site `users:admin` scope, which
+only that site's own administrator can grant, and by a single confirmation
+before each job runs. Role choices are the core five plus every role discovered
+on a connected website, so client-specific roles can be selected too.
+
 The roster of teams and staff is seeded by a migration and fully editable
 afterwards. Database changes for this feature live in `db/migrations/`, applied
 once each at boot by `src/migrate.js` and recorded in `schema_migrations`;

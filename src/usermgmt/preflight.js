@@ -82,17 +82,30 @@ export function predict({ staff, site, capabilities, roleCheck, existing, reques
     });
   }
 
-  // Not blockers — things the review screen shows so nothing is sprung at
-  // submit time.
-  //
   // The confirmation keys on siteAdmin (manage_options and friends), NOT on the
-  // broader adminLike. Stock WordPress gives Editor unfiltered_html, and Editor
-  // is every team's default role, so confirming on adminLike would put a modal
-  // in front of the single most common assignment — and a confirmation that
-  // fires on the common case is one people learn to click through.
+  // broader adminLike. Stock WordPress gives Editor unfiltered_html, so
+  // confirming on adminLike would put a modal in front of ordinary work — and a
+  // confirmation that fires on the common case is one people learn to click
+  // through.
   const needsAdminConfirmation = roleCheck.siteAdmin === true || isAdminLikeRole(requestedRole);
   // Surfaced as a notice rather than a gate: worth knowing, not worth stopping.
   const contentRisk = roleCheck.adminLike === true && roleCheck.siteAdmin !== true;
+
+  // THE gate that survived the policy change. Administrator may now be a team
+  // or per-user default, so an administering role will reach far more sites
+  // than before — which makes it more important, not less, that a site only
+  // accepts one if its OWN administrator granted users:admin. This dashboard
+  // cannot grant that scope, and a job must not discover the refusal one site
+  // at a time, so it is a blocker here rather than a per-site failure later.
+  if (needsAdminConfirmation && capabilities.readiness === READINESS.READY) {
+    const scopes = capabilities.scopes || [];
+    if (!scopes.includes("users:admin")) {
+      blockers.push({
+        code: "admin_scope_denied",
+        message: `${site.name} hasn't allowed Administrator to be granted from here. Someone with access to that site's WP Admin can enable it under DE Monitoring → User management.`,
+      });
+    }
+  }
 
   if (blockers.length) {
     return { action: ACTION.BLOCKED, blockers, needsAdminConfirmation, contentRisk };
@@ -272,15 +285,28 @@ function summarize(rows) {
   const counts = { create: 0, update: 0, link_required: 0, skip: 0, blocked: 0 };
   let needsAdminConfirmation = 0;
   let contentRisk = 0;
+  // Counted as distinct WEBSITES, not rows: "grants Administrator on 7
+  // websites" is the sentence someone can actually weigh. "on 34 assignments"
+  // is not.
+  const adminSites = new Set();
+  const adminBlockedSites = new Set();
   for (const r of rows) {
     counts[r.action] = (counts[r.action] || 0) + 1;
-    if (r.needsAdminConfirmation) needsAdminConfirmation++;
+    if (r.needsAdminConfirmation) {
+      needsAdminConfirmation++;
+      if (r.action !== ACTION.BLOCKED) adminSites.add(r.websiteId);
+    }
     if (r.contentRisk) contentRisk++;
+    if (r.blockers.some((b) => b.code === "admin_scope_denied")) adminBlockedSites.add(r.websiteId);
   }
   return {
     total: rows.length,
     ...counts,
     needsAdminConfirmation,
+    // What the single, once-per-job confirmation is about.
+    adminSiteCount: adminSites.size,
+    adminSiteIds: [...adminSites],
+    adminBlockedSiteCount: adminBlockedSites.size,
     contentRisk,
     actionable: counts.create + counts.update,
     sites: new Set(rows.map((r) => r.websiteId)).size,

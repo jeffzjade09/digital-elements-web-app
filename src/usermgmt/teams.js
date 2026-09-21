@@ -7,7 +7,7 @@
 // No Express, no req/res — plain arguments in, plain objects out.
 
 import { query } from "../db.js";
-import { assertDefaultRole, normalizeRoleSlug } from "./roles.js";
+import { assertDefaultRole, normalizeRoleSlug, knownRoleSlugs } from "./roles.js";
 
 function rowToTeam(r) {
   return {
@@ -78,7 +78,7 @@ export async function getTeamBySlug(slug) {
 
 export async function createTeam({ name, description, defaultWpRole }, createdBy = null) {
   const cleanedName = cleanName(name);
-  const role = assertDefaultRole(defaultWpRole || "editor");
+  const role = assertDefaultRole(defaultWpRole || "editor", await knownRoleSlugs());
   const slug = await uniqueSlug(slugify(cleanedName));
 
   const { rows } = await query(
@@ -100,7 +100,7 @@ export async function updateTeam(id, { name, description, defaultWpRole }) {
   const cleanedName = name === undefined ? current.name : cleanName(name);
   const role = defaultWpRole === undefined
     ? current.defaultWpRole
-    : assertDefaultRole(defaultWpRole);
+    : assertDefaultRole(defaultWpRole, await knownRoleSlugs());
   const desc = description === undefined ? current.description : String(description || "").trim();
 
   // Renaming re-derives the slug only when the name actually changed, so links

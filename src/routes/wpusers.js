@@ -14,6 +14,7 @@ import * as teams from "../usermgmt/teams.js";
 import * as staff from "../usermgmt/staffUsers.js";
 import * as audit from "../usermgmt/audit.js";
 import { CORE_ROLES } from "../usermgmt/roles.js";
+import { getKnownRoles } from "../usermgmt/roles.js";
 import { wpUserManagers, setWpUserManagers } from "../usermgmt/grants.js";
 import { requirePerm } from "../auth.js";
 import * as credentials from "../usermgmt/credentials.js";
@@ -50,9 +51,25 @@ const asyncRoute = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((er
 // ---------------------------------------------------------------- vocabulary
 // The role list the UI's dropdowns are built from. Per-website custom roles are
 // added by the phase that can ask a site what roles it actually has.
-router.get("/roles", (req, res) => {
-  res.json({ ok: true, roles: CORE_ROLES, source: "core" });
-});
+router.get("/roles", asyncRoute(async (req, res) => {
+  // The core five plus every role discovered on a connected website, so a
+  // client's custom role (seo_editor, shop_manager) can be chosen as a default
+  // without a code change. The per-site availability check still runs at
+  // preflight — this is what is offerable, not what exists everywhere.
+  try {
+    const known = await getKnownRoles();
+    res.json({ ok: true, roles: known.roles, siteTotal: known.siteTotal, source: "discovered" });
+  } catch (err) {
+    // The role cache is a convenience. If it can't be read, the dropdowns fall
+    // back to the roles every WordPress install has rather than going blank.
+    console.error("[wpusers] role discovery failed, falling back to core:", err.message);
+    res.json({
+      ok: true,
+      roles: CORE_ROLES.map((r) => ({ ...r, siteAdmin: r.slug === "administrator", siteCount: 0, core: true })),
+      siteTotal: 0, source: "core",
+    });
+  }
+}));
 
 // --------------------------------------------------------------------- teams
 router.get("/teams", asyncRoute(async (req, res) => {
