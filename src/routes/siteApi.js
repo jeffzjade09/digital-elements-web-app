@@ -24,6 +24,7 @@ import { getWebsiteSite, query } from "../db.js";
 import { resolveActingStaff, actorRefusalMessage, ACTOR_REFUSALS } from "../usermgmt/siteActor.js";
 import { autoLinkActingUser } from "../usermgmt/autoLink.js";
 import { reconcileFromObserved } from "../usermgmt/reconcile.js";
+import { resendInvite, getAssignment } from "../usermgmt/invites.js";
 import * as audit from "../usermgmt/audit.js";
 
 export const router = express.Router();
@@ -266,6 +267,43 @@ router.post("/assign", requireSiteScope("plugin:assign"), asyncRoute(async (req,
 
     res.json({ ok: true, jobId: job.jobId, operations: job.operations, replayed: job.replayed === true });
   } catch (err) { return fail(res, err); }
+}));
+
+/* ------------------------------------------------------------------ invite */
+
+/**
+ * Resend, from the site's own Team Members panel.
+ *
+ * Same code path as the dashboard button — same guards, same rate limit, same
+ * audit row — so the two cannot drift apart. The site names a person, never a
+ * website: which site this is comes from the credential that signed the
+ * request, as everywhere else in this API.
+ */
+router.post("/invite/resend", requireSiteScope("plugin:assign"), asyncRoute(async (req, res) => {
+  const actor = await requireActor(req, res);
+  if (!actor) return;
+
+  const staffUserId = String(req.body?.staffUserId || "");
+  if (!staffUserId) return fail(res, { code: "bad_request", message: "Choose someone to resend to." });
+
+  const assignment = await getAssignment(staffUserId, req.site.id);
+  if (!assignment) return fail(res, { code: "not_found", message: "They don't have an account on this website yet." }, 404);
+
+  const site = await getWebsiteSite(req.site.id);
+  if (!site) return fail(res, { code: "unknown_site", message: "This website is no longer registered." }, 404);
+
+  try {
+    const result = await resendInvite({
+      site, assignment,
+      actor: { actorUserId: null, actorEmail: actor.email, ip: req.ip, via: "plugin" },
+    });
+    res.json({ ok: true, ...result, email: assignment.email });
+  } catch (err) {
+    const status = err.code === "rate_limited" ? 429
+      : err.code === "not_managed" || err.code === "linked_account_protected" ? 403
+      : 502;
+    return fail(res, { code: err.code || "failed", message: err.message }, status);
+  }
 }));
 
 /* -------------------------------------------------------------------- jobs */

@@ -57,19 +57,62 @@
 
   /* ------------------------------------------------------------ rendering */
 
+  function onResend(button) {
+    var id = button.getAttribute('data-id');
+    if (!id) return;
+    button.disabled = true;
+    button.textContent = 'Sending…';
+    message('Sending…');
+    post('deheled_tm_resend', { staffId: id }, function (err, data) {
+      if (err) {
+        button.disabled = false;
+        button.textContent = 'Resend invitation';
+        return message(err.message || DEHELED_TM.strings.genericError, 'warn');
+      }
+      // Re-read rather than assume: whether the email actually went out is the
+      // whole question, and only the website can answer it.
+      message(data.message || 'Sent.', data.delivered ? '' : 'warn');
+      loadRoster(true);
+    });
+  }
+
   function selectedIds() { return Object.keys(state.selected).filter(function (id) { return state.selected[id]; }); }
 
   function memberRow(m) {
     // Already here: shown so the list is the whole team, but not selectable —
     // re-adding someone is not a thing this screen does.
     if (m.present) {
+      // Whether the invitation was ever acted on. An account that exists but was
+      // never set up is the case this panel used to be silent about: it showed
+      // "Already here" and the person still could not sign in.
+      var inv = m.invite || {};
+      var invChip = '';
+      if (inv.label) {
+        var cls = inv.state === 'activated' ? 'ok' : inv.state === 'pending_setup' ? 'warn' : '';
+        // An "Active" we inferred from a used set-password link is weaker
+        // evidence than one we watched happen. Both read "Active"; the tooltip
+        // says which, for whoever is looking into one specific account.
+        var title = inv.signal === 'meta' ? 'Observed: they completed a password reset.'
+          : inv.signal === 'key_cleared' ? 'Inferred: their set-password link has been used.'
+          : '';
+        invChip = '<span class="deheled-tm-chip ' + cls + '"'
+          + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(inv.label) + '</span>';
+      }
+      var resend = inv.canResend
+        ? '<button type="button" class="button-link deheled-tm-resend" data-id="' + esc(m.id) + '">Resend invitation</button>'
+        // An absent button reads as a bug, so say why and name what they can do.
+        : (inv.why ? '<span class="deheled-tm-why">' + esc(inv.why) + '</span>' : '');
+
       return '<li class="deheled-tm-member is-present">'
         + '<span class="deheled-tm-name">' + esc(m.label) + '<small>' + esc(m.email) + '</small></span>'
         + '<span class="deheled-tm-badges">'
         + '<span class="deheled-tm-chip ok">Already here</span>'
         + (m.roles.length ? '<span class="deheled-tm-chip">' + esc(m.roles.join(', ')) + '</span>' : '')
         + (m.managed ? '' : '<span class="deheled-tm-chip warn">not managed by us</span>')
-        + '</span></li>';
+        + invChip
+        + '</span>'
+        + (resend ? '<span class="deheled-tm-invite-action">' + resend + '</span>' : '')
+        + '</li>';
     }
     // Not here. If the dashboard thought otherwise, say so rather than quietly
     // showing a different list than it did last time: somebody removed this
@@ -163,6 +206,9 @@
     if (refresh) refresh.addEventListener('click', function () { loadRoster(true); });
     var review = document.getElementById('deheled-tm-review');
     if (review) review.addEventListener('click', doPreflight);
+    root.querySelectorAll('.deheled-tm-resend').forEach(function (btn) {
+      btn.addEventListener('click', function () { onResend(btn); });
+    });
   }
 
   /* -------------------------------------------------------------- roster */
