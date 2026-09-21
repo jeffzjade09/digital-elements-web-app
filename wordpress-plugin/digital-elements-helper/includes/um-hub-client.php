@@ -112,12 +112,22 @@ function deheled_hub_request($method, $path, $args = array()) {
         return new WP_Error('rate_limited', 'The dashboard is rate-limiting this website. Try again shortly.');
     }
     if ($code === 403) {
-        // The hub answers every credential failure identically on purpose, so
-        // there is nothing more specific to say — except for the one case it
-        // does distinguish, which an administrator can act on.
+        // The hub answers every CREDENTIAL failure identically on purpose, so
+        // for those there is nothing more specific to say. The refusals below
+        // are different: they are about the person or this plugin's version,
+        // the hub writes them for an administrator to read, and each has a
+        // different thing to do about it. Passing them through is what stops
+        // "you aren't on the roster" and "the credential is wrong" from looking
+        // the same to whoever is standing at the screen.
         $hub_code = isset($decoded['error']['code']) ? (string) $decoded['error']['code'] : '';
+        $hub_message = isset($decoded['error']['message']) ? (string) $decoded['error']['message'] : '';
+        $passthrough = array('scope_denied', 'actor_not_on_roster', 'actor_team_not_allowed',
+                             'actor_inactive', 'actor_not_agency', 'plugin_update_required');
         if ($hub_code === 'scope_denied') {
             return new WP_Error('scope_denied', 'Digital Elements hasn\'t permitted this website to add staff from here.');
+        }
+        if (in_array($hub_code, $passthrough, true) && $hub_message !== '') {
+            return new WP_Error($hub_code, $hub_message);
         }
         return new WP_Error('forbidden', 'The dashboard refused this website\'s request. Try reconnecting under DE Monitoring.');
     }
@@ -144,6 +154,34 @@ function deheled_hub_request($method, $path, $args = array()) {
  * Cached rather than fetched per page load because this panel is opened and
  * re-opened while someone works through a list, and the roster changes rarely.
  */
+/**
+ * Who the hub should treat as acting, and what it needs to know about them.
+ *
+ * Sent on every call, in the BODY, so the signature covers it byte for byte.
+ * The hub refuses a request that omits it rather than treating it as anonymous:
+ * a rule that can be skipped by leaving a field out is not a rule.
+ *
+ * `actorManaged` is what lets the hub adopt a colleague's pre-existing account
+ * exactly once — it asks only when the site says the account isn't ours yet.
+ */
+function deheled_hub_actor_fields() {
+    $user = wp_get_current_user();
+    if (!$user || !$user->ID) return array();
+    return array(
+        'actorEmail'    => (string) $user->user_email,
+        'actorWpUserId' => (int) $user->ID,
+        'actorManaged'  => deheled_um_user_is_managed($user->ID),
+    );
+}
+
+/**
+ * The roster, cached locally.
+ *
+ * POST rather than GET since 2.7.1: the acting person travels in the body,
+ * where the signature already covers the exact bytes. A query string would have
+ * to canonicalise identically in PHP and JS to produce a matching signature,
+ * and there is nothing to gain by taking that risk.
+ */
 function deheled_hub_get_roster($force = false) {
     $key = deheled_hub_roster_cache_key();
     if (!$force) {
@@ -151,15 +189,22 @@ function deheled_hub_get_roster($force = false) {
         if (is_array($cached)) return $cached;
     }
 
-    $roster = deheled_hub_request('GET', '/roster', array('timeout' => 15));
+    $roster = deheled_hub_request('POST', '/roster', array(
+        'body'    => deheled_hub_actor_fields(),
+        'timeout' => 15,
+    ));
     if (is_wp_error($roster)) return $roster;
 
-    set_transient($key, $roster, DEHELED_ROSTER_TTL);
+    // Not cached when the hub has just adopted this account: the very next
+    // request should report the account as managed, and a five-minute cache of
+    // "we linked you" would make a second visit look like a second link.
+    $linked = isset($roster['actor']['linked']) && $roster['actor']['linked'] === true;
+    if (!$linked) set_transient($key, $roster, DEHELED_ROSTER_TTL);
     return $roster;
 }
 
 function deheled_hub_preflight($staff_ids, $role = '') {
-    $body = array('staffUserIds' => array_values($staff_ids));
+    $body = array_merge(deheled_hub_actor_fields(), array('staffUserIds' => array_values($staff_ids)));
     if ($role !== '') $body['role'] = $role;
     return deheled_hub_request('POST', '/preflight', array('body' => $body, 'timeout' => 30));
 }
@@ -172,11 +217,10 @@ function deheled_hub_preflight($staff_ids, $role = '') {
  * than starting a second one that adds everybody twice.
  */
 function deheled_hub_assign($staff_ids, $role, $idempotency_key, $confirm_admin = false) {
-    $body = array(
+    $body = array_merge(deheled_hub_actor_fields(), array(
         'staffUserIds' => array_values($staff_ids),
-        'actorEmail'   => wp_get_current_user()->user_email,
         'confirmAdmin' => (bool) $confirm_admin,
-    );
+    ));
     if ($role !== '') $body['role'] = $role;
 
     return deheled_hub_request('POST', '/assign', array(

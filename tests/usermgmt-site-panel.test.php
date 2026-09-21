@@ -304,20 +304,26 @@ echo "\n--- a client's own Administrator is refused ---\n";
 reset_all(); set_connected();
 set_staff_user('owner@theclient.com', false);
 $gate = deheled_site_users_gate();
-eq('an unmanaged administrator is refused', $gate['state'], 'no_permission');
-ok('...and told why in terms they can act on', strpos($gate['message'], 'Digital Elements') !== false, $gate['message']);
+eq('the client\'s own administrator is refused', $gate['state'], 'no_permission');
+ok('...and told the rule that excluded them',
+   strpos($gate['message'], DEHELED_AGENCY_DOMAIN) !== false, $gate['message']);
 
 reset_all(); set_connected();
 set_staff_user('owner@theclient.com', true);   // managed, but not an agency address
-eq('a managed account on another domain is refused', deheled_site_users_gate()['state'], 'no_permission');
+eq('a managed account on another domain is still refused', deheled_site_users_gate()['state'], 'no_permission');
 
 reset_all(); set_connected();
 set_staff_user('jason@digitalelementsgroup.com.evil.com', true);
-eq('a lookalike domain is refused', deheled_site_users_gate()['state'], 'no_permission');
+eq('a suffix attack is refused', deheled_site_users_gate()['state'], 'no_permission');
 
+// The regression this release exists for: an agency colleague whose WordPress
+// account predates the dashboard has no _de_managed flag, and used to be
+// refused by name. Whether they may act is the hub's call now, so the local
+// gate lets them through to ask.
 reset_all(); set_connected();
-set_staff_user('jason@digitalelementsgroup.com', false);
-eq('an agency address that is not managed is refused', deheled_site_users_gate()['state'], 'no_permission');
+set_staff_user('jeff@digitalelementsgroup.com', false);
+eq('an agency address that was never linked is NOT refused locally',
+   deheled_site_users_gate()['state'], 'available');
 
 echo "\n--- WordPress capability is required too ---\n";
 reset_all(); set_connected();
@@ -420,18 +426,43 @@ $call = $GLOBALS['__http_calls'][0];
 $h = $call['args']['headers'];
 
 ok('goes to the site API', strpos($call['url'], '/api/site/v1/roster') !== false, $call['url']);
+eq('as a POST, so the acting person is inside the signature', $call['args']['method'], 'POST');
 ok('carries the key id', $h['X-DE-Key-Id'] === 'dek_abc123');
 ok('uses the SITE signature version', strpos($h['X-DE-Signature'], 'DE1-SITE-HMAC-SHA256 ') === 0, $h['X-DE-Signature']);
 // The direction that must not be reusable in the other.
 ok('...which is not the inbound version', strpos($h['X-DE-Signature'], DEHELED_UM_SIG_VERSION . ' ') !== 0);
 ok('carries a timestamp', preg_match('/^\d{9,}$/', $h['X-DE-Timestamp']) === 1);
 ok('carries a nonce', strlen($h['X-DE-Nonce']) > 20);
+ok('sends no query string at all', strpos($call['url'], '?') === false, $call['url']);
 
 // The signature must actually verify against the canonical string.
 $expected = base64_encode(hash_hmac('sha256',
-    deheled_um_canonical_string('GET', '/api/site/v1/roster', array(), $h['X-DE-Timestamp'], $h['X-DE-Nonce'], '', ''),
+    deheled_um_canonical_string('POST', '/api/site/v1/roster', array(),
+        $h['X-DE-Timestamp'], $h['X-DE-Nonce'], '', $call['args']['body']),
     'site-secret', true));
 eq('the signature matches the canonical string', $h['X-DE-Signature'], 'DE1-SITE-HMAC-SHA256 ' . $expected);
+
+echo "\n--- who is acting travels in the signed body ---\n";
+$sent = json_decode($call['args']['body'], true);
+eq('the acting address is sent', $sent['actorEmail'], 'jason@digitalelementsgroup.com');
+eq('...with their WordPress id, so the hub can adopt the account', $sent['actorWpUserId'], 7);
+eq('...and whether this site already manages it', $sent['actorManaged'], true);
+
+reset_all(); set_connected();
+set_staff_user('jeff@digitalelementsgroup.com', false);
+$GLOBALS['__http'] = hub_json(roster_body());
+deheled_hub_get_roster(true);
+$unmanaged = json_decode($GLOBALS['__http_calls'][0]['args']['body'], true);
+eq('an unlinked account says so, which is what triggers the adoption',
+   $unmanaged['actorManaged'], false);
+
+echo "\n--- preflight and assign name the actor too ---\n";
+reset_all(); set_staff_user(); set_connected();
+$GLOBALS['__http'] = hub_json(array('ok' => true, 'rows' => array(), 'summary' => array()));
+deheled_hub_preflight(array('u1'), 'editor');
+$pre_body = json_decode($GLOBALS['__http_calls'][0]['args']['body'], true);
+eq('preflight sends the actor', $pre_body['actorEmail'], 'jason@digitalelementsgroup.com');
+ok('...alongside the people chosen', $pre_body['staffUserIds'] === array('u1'));
 
 ok('the secret is never sent', strpos(json_encode($h), 'site-secret') === false);
 ok('the license key is never sent', strpos(json_encode($call['args']), 'DEG-AAAAA') === false);
@@ -567,6 +598,105 @@ run_handler('wp_ajax_deheled_tm_assign', array('ids' => array('u1'), 'role' => '
 ok('wp_insert_user was never called', empty($GLOBALS['__wp_insert_user_called']));
 ok('wp_create_user was never called', empty($GLOBALS['__wp_create_user_called']));
 ok('the request went to the hub instead', count($GLOBALS['__http_calls']) === 1);
+
+echo "\n--- the exact-domain matcher ---\n";
+// One address per way of getting this wrong. Each line is a way in if the rule
+// is written as a substring test instead of a comparison of the whole domain.
+$accept = array(
+    'jeff@digitalelementsgroup.com'        => 'the plain form',
+    'JEFF@DigitalElementsGroup.COM'        => 'any case',
+    '  jeff@digitalelementsgroup.com  '    => 'surrounding whitespace',
+    'jeff@digitalelementsgroup.com.'       => 'a trailing dot, which is the same host',
+    'first.last+tag@digitalelementsgroup.com' => 'a local part with dots and a tag',
+);
+foreach ($accept as $email => $why) {
+    ok("accepts $why", deheled_site_users_is_agency_email($email), $email);
+}
+
+$reject = array(
+    'jeff@wp.digitalelementsgroup.com'     => 'a subdomain is not the domain',
+    'jeff@mail.digitalelementsgroup.com'   => 'another subdomain',
+    'jeff@digitalelementsgroup.co'         => 'a look-alike TLD',
+    'jeff@digital-elementsgroup.com'       => 'a look-alike with a hyphen',
+    'jeff@digitalelementsgroupp.com'       => 'a look-alike with a doubled letter',
+    'jeff@digitalelementsgroup.com.evil.com' => 'a suffix attack',
+    'jeff@evildigitalelementsgroup.com'    => 'a prefix attack',
+    'a@b.com@digitalelementsgroup.com'     => 'two @, which resolves ambiguously',
+    'jeff@'                                => 'no domain',
+    '@digitalelementsgroup.com'            => 'no local part',
+    'jeffdigitalelementsgroup.com'         => 'no @ at all',
+    'jeff@gmail.com'                       => 'a personal address',
+    ''                                     => 'an empty string',
+    '   '                                  => 'whitespace only',
+);
+foreach ($reject as $email => $why) {
+    ok("rejects $why", deheled_site_users_is_agency_email($email) === false, var_export($email, true));
+}
+ok('rejects null', deheled_site_users_is_agency_email(null) === false);
+
+echo "\n--- the hub\'s verdict on the person gets its own state ---\n";
+// The hub owns the roster and the team, so only it can answer these. Each is a
+// different thing to do about it, so each keeps a distinct state and message
+// rather than collapsing into "unavailable".
+reset_all(); set_staff_user(); set_connected();
+eq('not on the roster',
+   deheled_site_users_gate(new WP_Error('actor_not_on_roster', 'That account isn\'t on the Digital Elements roster.'))['state'],
+   'not_on_roster');
+
+eq('on the roster, in a team that may not use this',
+   deheled_site_users_gate(new WP_Error('actor_team_not_allowed', 'Only Web Development and Admin team members can manage users from here.'))['state'],
+   'team_not_allowed');
+
+$team_gate = deheled_site_users_gate(new WP_Error('actor_team_not_allowed', 'Only Web Development and Admin team members can manage users from here.'));
+ok('...and told which teams may', strpos($team_gate['message'], 'Web Development') !== false, $team_gate['message']);
+
+eq('disabled on the roster reads as not on it',
+   deheled_site_users_gate(new WP_Error('actor_inactive', 'That account is disabled on the Digital Elements roster.'))['state'],
+   'not_on_roster');
+
+$stale = deheled_site_users_gate(new WP_Error('plugin_update_required', 'This website\'s Digital Elements plugin is out of date. Update it to 2.7.1 or later.'));
+eq('a hub that wants a newer plugin says so', $stale['state'], 'plugin_outdated');
+ok('...naming the version to update to', strpos($stale['message'], '2.7.1') !== false, $stale['message']);
+
+// Still distinct from everything else, and still never "Unavailable".
+$all_states = array('license_missing','license_invalid','license_expired','not_enrolled','write_not_granted',
+                    'plugin_assign_not_granted','hub_unreachable','roster_empty','no_permission',
+                    'not_on_roster','team_not_allowed','plugin_outdated');
+$all_titles = array();
+foreach ($all_states as $st) $all_titles[] = deheled_site_users_state_title($st);
+eq('twelve distinct titles', count(array_unique($all_titles)), 12);
+ok('none falls back to "Unavailable"', !in_array('Unavailable', $all_titles, true));
+
+echo "\n--- the hub\'s refusal reaches the person, not a generic 403 ---\n";
+reset_all(); set_staff_user(); set_connected();
+$GLOBALS['__http'] = hub_json(array('ok' => false, 'error' => array(
+    'code' => 'actor_team_not_allowed',
+    'message' => 'Only Web Development and Admin team members can manage users from here.')), 403);
+$r = deheled_hub_get_roster(true);
+eq('the code survives the transport', $r->get_error_code(), 'actor_team_not_allowed');
+ok('...and so does the sentence', strpos($r->get_error_message(), 'Web Development') !== false);
+
+reset_all(); set_staff_user(); set_connected();
+$GLOBALS['__http'] = hub_json(array('ok' => false, 'error' => array('code' => 'forbidden')), 403);
+eq('an ordinary credential refusal stays generic', deheled_hub_get_roster(true)->get_error_code(), 'forbidden');
+
+echo "\n--- a linked account is not cached as linked ---\n";
+// Caching "we just adopted you" for five minutes would make the next visit look
+// like a second adoption, and hide the account's new state from the panel.
+reset_all(); set_connected();
+set_staff_user('jeff@digitalelementsgroup.com', false);
+$linked = roster_body();
+$linked['actor'] = array('email' => 'jeff@digitalelementsgroup.com', 'team' => 'Web Development', 'linked' => true);
+$GLOBALS['__http'] = hub_json($linked);
+deheled_hub_get_roster(true);
+ok('the adopting response is not cached', get_transient(deheled_hub_roster_cache_key()) === false);
+
+reset_all(); set_staff_user(); set_connected();
+$ordinary = roster_body();
+$ordinary['actor'] = array('email' => 'jason@digitalelementsgroup.com', 'team' => 'SEO', 'linked' => false);
+$GLOBALS['__http'] = hub_json($ordinary);
+deheled_hub_get_roster(true);
+ok('an ordinary response still is', is_array(get_transient(deheled_hub_roster_cache_key())));
 
 echo "\n--- the panel advertises itself to the dashboard ---\n";
 ok('site.assign is a reported capability', in_array('site.assign', deheled_um_capability_list(), true),

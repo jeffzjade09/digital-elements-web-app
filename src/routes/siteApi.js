@@ -21,12 +21,11 @@ import { startAssignment, getJob } from "../usermgmt/sync.js";
 import { getSiteRoles } from "../usermgmt/roles.js";
 import { getCapabilities } from "../usermgmt/capabilities.js";
 import { getWebsiteSite, query } from "../db.js";
-import { getStaffByEmail } from "../usermgmt/staffUsers.js";
+import { resolveActingStaff, actorRefusalMessage, ACTOR_REFUSALS } from "../usermgmt/siteActor.js";
+import { autoLinkActingUser } from "../usermgmt/autoLink.js";
 import * as audit from "../usermgmt/audit.js";
 
 export const router = express.Router();
-
-const AGENCY_DOMAIN = "digitalelementsgroup.com";
 
 function fail(res, err, status = 400) {
   const message = err && err.message ? err.message : "Request failed.";
@@ -38,19 +37,41 @@ const asyncRoute = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((er
 });
 
 /**
- * Who the plugin says is acting, checked against the roster.
+ * Who the plugin says is acting, resolved against the roster AND their team.
  *
- * The claimed address is a LABEL FOR THE AUDIT LOG, never authorization —
- * authorization is the signed credential plus the hub's own rules. Resolving it
- * against staff_users limits a compromised site to impersonating a real
- * colleague rather than inventing an actor, which is modest but free.
+ * Required on every route. A site that omits it is refused rather than treated
+ * as anonymous — otherwise the team restriction below could be sidestepped by
+ * leaving a field out, which is not a rule at all.
+ *
+ * The claimed address is set by whoever administers the WordPress site, so this
+ * is a mistake-guard and a visibility control, not a boundary against a
+ * malicious site administrator. src/usermgmt/siteActor.js says what does bound
+ * the damage, and why the team restriction is the useful part.
+ *
+ * Refuses by calling res itself and returning null, so each route reads as one
+ * line: get the actor, or stop.
  */
-async function resolveActor(req) {
-  const claimed = String(req.body?.actorEmail || "").trim().toLowerCase();
-  if (!claimed || !claimed.endsWith(`@${AGENCY_DOMAIN}`)) return null;
-  const staff = await getStaffByEmail(claimed);
-  if (!staff || staff.status !== "active") return null;
-  return { email: staff.email, staffUserId: staff.id };
+async function requireActor(req, res) {
+  const result = await resolveActingStaff(req.body?.actorEmail);
+  if (result.ok) return result;
+
+  await audit.record({
+    action: "site.actor_refused", entityType: "website", entityId: req.site.id,
+    websiteId: req.site.id, ip: req.ip, result: "refused",
+    targetEmail: result.email || null,
+    after: {
+      reason: result.reason, via: "plugin", route: req.path,
+      team: result.team || null, site: req.site.name,
+    },
+  });
+
+  // A missing actor means an out-of-date plugin, which is a different fix from
+  // "you aren't allowed", so it gets its own code and its own message.
+  const code = result.reason === ACTOR_REFUSALS.MISSING
+    ? "plugin_update_required"
+    : result.reason;
+  fail(res, { code, message: actorRefusalMessage(result.reason) }, 403);
+  return null;
 }
 
 function actorFor(req, actor) {
@@ -63,7 +84,18 @@ function actorFor(req, actor) {
 
 /* ------------------------------------------------------------------ roster */
 
-router.get("/roster", requireSiteScope("users:read"), asyncRoute(async (req, res) => {
+// POST, not GET, for two reasons: the acting person travels in the body, where
+// the signature already covers it byte for byte (a query string would have to
+// canonicalise identically in PHP and JS to produce a matching signature), and
+// this call now has a deliberate side effect — the first visit adopts the
+// caller's own account.
+//
+// GET is kept below, answering only "your plugin is out of date", so a site on
+// 2.7.0 gets an instruction instead of a 404.
+router.post("/roster", requireSiteScope("users:read"), asyncRoute(async (req, res) => {
+  const actor = await requireActor(req, res);
+  if (!actor) return;
+
   const site = await getWebsiteSite(req.site.id);
   if (!site) return fail(res, { code: "unknown_site", message: "This website is no longer registered." }, 404);
 
@@ -77,9 +109,20 @@ router.get("/roster", requireSiteScope("users:read"), asyncRoute(async (req, res
 
   await audit.record({
     action: "site.roster_read", entityType: "website", entityId: req.site.id,
-    websiteId: req.site.id, ip: req.ip,
-    after: { members: roster.counts.members, via: "plugin" },
+    websiteId: req.site.id, ip: req.ip, actorEmail: actor.email,
+    after: { members: roster.counts.members, via: "plugin", team: actor.team },
   });
+
+  // Adopt the caller's own pre-existing account, once. Deliberately after the
+  // roster is built and never allowed to fail the request: access is the gate,
+  // and a link that the site refuses — because it hasn't granted users:admin —
+  // must not close a panel the person is entitled to use.
+  let autoLink = null;
+  if (req.body?.actorManaged === false) {
+    autoLink = await autoLinkActingUser({
+      site, actor, wpUserId: req.body?.actorWpUserId, ip: req.ip,
+    });
+  }
 
   res.json({
     ok: true,
@@ -98,13 +141,37 @@ router.get("/roster", requireSiteScope("users:read"), asyncRoute(async (req, res
     // picked people.
     canAssign: req.site.effectiveScopes.includes("plugin:assign"),
     readiness: caps.readiness,
+    // Echoed so the panel can name the person and their team, and say whether
+    // their account was adopted on this visit.
+    actor: {
+      email: actor.email, team: actor.team, teamSlug: actor.teamSlug,
+      linked: autoLink ? autoLink.linked : null,
+      linkReason: autoLink ? autoLink.reason : null,
+    },
     generatedAt: new Date().toISOString(),
   });
+}));
+
+/**
+ * The 2.7.0 shape of this route.
+ *
+ * Answered explicitly rather than left to 404, because "your plugin is out of
+ * date" and "this route doesn't exist" look identical to a site otherwise, and
+ * only one of them has an action attached.
+ */
+router.get("/roster", asyncRoute(async (req, res) => {
+  return fail(res, {
+    code: "plugin_update_required",
+    message: "This website's Digital Elements plugin is out of date. Update it to 2.7.1 or later.",
+  }, 403);
 }));
 
 /* --------------------------------------------------------------- preflight */
 
 router.post("/preflight", requireSiteScope("users:read"), asyncRoute(async (req, res) => {
+  const actor = await requireActor(req, res);
+  if (!actor) return;
+
   const b = req.body || {};
   let staffUserIds;
   try { staffUserIds = await assertStaffSelectable(b.staffUserIds); }
@@ -135,10 +202,8 @@ router.post("/assign", requireSiteScope("plugin:assign"), asyncRoute(async (req,
     return fail(res, { code: "scope_denied", message: "This website hasn't allowed accounts to be created from the dashboard." }, 403);
   }
 
-  const actor = await resolveActor(req);
-  if (!actor) {
-    return fail(res, { code: "unknown_actor", message: "The person making this request isn't on the Digital Elements roster." }, 403);
-  }
+  const actor = await requireActor(req, res);
+  if (!actor) return;
 
   let staffUserIds;
   try { staffUserIds = await assertStaffSelectable(b.staffUserIds); }
@@ -173,6 +238,7 @@ router.post("/assign", requireSiteScope("plugin:assign"), asyncRoute(async (req,
         via: "plugin",
         site: req.site.name,
         actingWpUser: actor.email,
+        actingTeam: actor.team,
         members: staffUserIds.length,
         role: b.role || null,
         confirmAdmin: b.confirmAdmin === true,
@@ -193,6 +259,8 @@ router.post("/assign", requireSiteScope("plugin:assign"), asyncRoute(async (req,
  * as NOT FOUND rather than forbidden — a site should not be able to learn that
  * another site's job exists.
  */
+// Left as a GET with no actor: it reports only on a job this site already
+// started, the check below scopes it to that, and polling it is not an action.
 router.get("/jobs/:id", requireSiteScope("users:read"), asyncRoute(async (req, res) => {
   const { rows } = await query(
     "select id from user_sync_jobs where id = $1 and origin_website_id = $2",

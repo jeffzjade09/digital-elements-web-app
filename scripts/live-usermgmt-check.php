@@ -1089,8 +1089,8 @@ echo "\n=== Team Members: who the gate refuses ===\n";
 wp_set_current_user((int) $tm_client);
 ok('the client\'s own administrator is refused', panel_state() === 'no_permission', panel_state());
 $client_gate = deheled_site_users_gate();
-ok('...and told it is for Digital Elements accounts',
-    strpos($client_gate['message'], 'Digital Elements') !== false, $client_gate['message']);
+ok('...and told the rule that excluded them',
+    strpos($client_gate['message'], DEHELED_AGENCY_DOMAIN) !== false, $client_gate['message']);
 
 // Flagging that account managed is not enough on its own — the address still
 // isn't ours. Removed again immediately afterwards.
@@ -1099,12 +1099,30 @@ ok('...still refused when flagged managed, because of the address',
     panel_state() === 'no_permission', panel_state());
 delete_user_meta($tm_client, DEHELED_UM_MANAGED_META);
 
-// And one of ours without the flag is refused too: both are required, so
-// neither alone is a way in.
+// One of OURS without the flag is no longer refused locally: an account that
+// predates the dashboard has no flag, and whether that person may act is the
+// hub's call now. This is the regression 2.7.1 fixes.
 wp_set_current_user((int) $tm_staff);
 delete_user_meta($tm_staff, DEHELED_UM_MANAGED_META);
-ok('an agency address that is not managed is refused', panel_state() === 'no_permission', panel_state());
+ok('an agency address that was never linked reaches the hub to be judged',
+    panel_state() === 'available', panel_state());
 update_user_meta($tm_staff, DEHELED_UM_MANAGED_META, '1');
+
+// ...and a look-alike domain still is refused, locally, before anything is sent.
+$tm_lookalike = wp_insert_user(array(
+    'user_login' => 'de-lc-lookalike-' . $suffix,
+    'user_email' => "de-livecheck-lookalike-$suffix@digitalelementsgroup.co",
+    'user_pass'  => wp_generate_password(32, true, true),
+    'role'       => 'administrator',
+));
+if (!is_wp_error($tm_lookalike)) {
+    $created_ids[] = (int) $tm_lookalike;
+    update_user_meta($tm_lookalike, DEHELED_UM_MANAGED_META, '1');
+    wp_set_current_user((int) $tm_lookalike);
+    ok('a look-alike domain is refused even when flagged managed',
+        panel_state() === 'no_permission', panel_state());
+}
+wp_set_current_user((int) $tm_staff);
 
 // A subscriber-level staff account: ours, managed, but with no business
 // touching users here.
@@ -1120,6 +1138,23 @@ if (!is_wp_error($tm_low)) {
     wp_set_current_user((int) $tm_low);
     ok('a managed staff account without edit_users is refused',
         panel_state() === 'no_permission', panel_state());
+}
+
+echo "\n=== Team Members: the exact-domain matcher ===\n";
+foreach (array(
+    'jeff@digitalelementsgroup.com'          => true,
+    'JEFF@DigitalElementsGroup.COM'          => true,
+    'jeff@digitalelementsgroup.com.'         => true,
+    'jeff@wp.digitalelementsgroup.com'       => false,
+    'jeff@digitalelementsgroup.co'           => false,
+    'jeff@digital-elementsgroup.com'         => false,
+    'jeff@digitalelementsgroup.com.evil.com' => false,
+    'a@b.com@digitalelementsgroup.com'       => false,
+    'jeff@gmail.com'                         => false,
+    ''                                       => false,
+) as $email => $expected) {
+    ok(($expected ? 'accepts ' : 'rejects ') . ($email === '' ? '(empty)' : $email),
+        deheled_site_users_is_agency_email($email) === $expected);
 }
 
 echo "\n=== Team Members: the capability-subset rule, against real roles ===\n";
@@ -1192,10 +1227,94 @@ if (!$hub_live) {
     if ($panel_saved_license !== null) update_option(DEHELED_LICENSE_OPTION, $panel_saved_license, 'no');
     if ($panel_saved_status !== null) update_option(DEHELED_LIC_STATUS, $panel_saved_status, 'no');
 
+    // Since 2.7.1 the hub answers only for someone it recognises, so the check
+    // has to act as a real member of staff before it can read anything. The
+    // default is the account from the bug this release fixes: on the roster, in
+    // Web Development, and — deliberately, below — with no _de_managed flag.
+    $actor_email = getenv('UM_LIVE_ACTOR') ? getenv('UM_LIVE_ACTOR') : 'jeff@digitalelementsgroup.com';
+    $existing_actor = get_user_by('email', $actor_email);
+    if ($existing_actor) {
+        $tm_actor = (int) $existing_actor->ID;
+        $actor_pre_existing = true;
+    } else {
+        $tm_actor = wp_insert_user(array(
+            'user_login' => 'de-lc-actor-' . $suffix,
+            'user_email' => $actor_email,
+            'user_pass'  => wp_generate_password(32, true, true),
+            'role'       => 'administrator',
+        ));
+        $actor_pre_existing = false;
+        if (!is_wp_error($tm_actor)) $created_ids[] = (int) $tm_actor;
+    }
+    ok('an acting account exists for the round-trip', !is_wp_error($tm_actor));
+
+    // THE SHAPE 2.7.1 EXISTS FOR: an administrator account created long before
+    // this tool, on the roster, carrying no _de_managed flag. Until now the
+    // panel refused exactly this person, by name.
+    $actor_was_managed = deheled_um_user_is_managed($tm_actor);
+    delete_user_meta($tm_actor, DEHELED_UM_MANAGED_META);
+    delete_user_meta($tm_actor, '_de_linked');
+    wp_set_current_user((int) $tm_actor);
+    echo "    acting as $actor_email (unmanaged, as a pre-existing account)\n";
+
+    ok('an unmanaged roster member is no longer refused locally',
+        deheled_site_users_gate()['state'] === 'available', deheled_site_users_gate()['state']);
+
     deheled_hub_clear_roster_cache();
     $roster = deheled_hub_get_roster(true);
     ok('the roster comes back', !is_wp_error($roster),
         is_wp_error($roster) ? $roster->get_error_code() . ': ' . $roster->get_error_message() : '');
+
+    if (!is_wp_error($roster)) {
+        echo "\n--- the account is adopted on first sight ---\n";
+        ok('the hub names the acting person', !empty($roster['actor']['email']), wp_json_encode($roster['actor']));
+        ok('...and their team', !empty($roster['actor']['team']), wp_json_encode($roster['actor']));
+        echo "    team: " . $roster['actor']['team']
+           . ", linked: " . var_export($roster['actor']['linked'], true)
+           . " (" . $roster['actor']['linkReason'] . ")\n";
+
+        // Either it adopted the account, or it refused because this site hasn't
+        // granted users:admin — which is the site's own kill switch and stays
+        // intact. BOTH are correct. What must never happen is the panel closing.
+        if ($roster['actor']['linked'] === true) {
+            // The hub wrote that meta over HTTP, in the php -S process. This
+            // one has its own object cache and would otherwise still be holding
+            // the value from before. A property of running the check outside
+            // the request that did the work, not of the plugin.
+            clean_user_cache($tm_actor);
+            wp_cache_delete($tm_actor, 'user_meta');
+
+            ok('the WordPress account is now managed', deheled_um_user_is_managed($tm_actor));
+            ok('...recorded as linked, not created',
+                get_user_meta($tm_actor, '_de_linked', true) === '1');
+
+            deheled_hub_clear_roster_cache();
+            $second_visit = deheled_hub_get_roster(true);
+            ok('a second visit still works', !is_wp_error($second_visit));
+            ok('...and does not adopt it a second time',
+                !is_wp_error($second_visit) && $second_visit['actor']['linked'] !== true,
+                is_wp_error($second_visit) ? '' : var_export($second_visit['actor']['linked'], true));
+        } elseif ($roster['actor']['linkReason'] === 'already_linked') {
+            // The dashboard already holds the link from an earlier run. Proof
+            // of the idempotency rather than of the adoption, so say which.
+            echo "    (the dashboard already had this link - the adoption path
+"
+               . "     ran on an earlier run; clear the assignment to see it again)
+";
+            ok('an existing link is not made twice', true);
+            ok('...and the panel is open', panel_state($roster) === 'available');
+        } else {
+            ok('a refused link says why', !empty($roster['actor']['linkReason']),
+                wp_json_encode($roster['actor']));
+            ok('...and the panel is open regardless', panel_state($roster) === 'available');
+            ok('...with the account left untouched', !deheled_um_user_is_managed($tm_actor));
+        }
+
+        // Managed from here on, so the assignment run below is unaffected.
+        update_user_meta($tm_actor, DEHELED_UM_MANAGED_META, '1');
+        deheled_hub_clear_roster_cache();
+        $roster = deheled_hub_get_roster(true);
+    }
 
     if (!is_wp_error($roster)) {
         ok('the dashboard permits this site to assign', !empty($roster['canAssign']));
@@ -1219,47 +1338,42 @@ if (!$hub_live) {
 
         // The hub acts FOR a person, not for a site: it resolves the acting
         // WordPress user against the roster and refuses if they aren't on it.
-        // Worth proving before anything else, because in production the person
-        // using this screen is always a hub-created account and so always is.
         echo "\n--- the acting WordPress user must be on the roster ---\n";
-        $stranger = deheled_hub_assign(array($members[0]['id']), 'editor', 'stranger-' . $suffix, false);
-        ok('an agency account the dashboard has never heard of is refused',
-            is_wp_error($stranger), 'the assignment was accepted');
-        ok('...without saying why, beyond that it was refused',
-            is_wp_error($stranger) && strpos($stranger->get_error_message(), 'roster') === false);
+        $before_stranger = wp_get_current_user();
+        $stranger_id = wp_insert_user(array(
+            'user_login' => 'de-lc-stranger-' . $suffix,
+            'user_email' => "de-livecheck-stranger-$suffix@digitalelementsgroup.com",
+            'user_pass'  => wp_generate_password(32, true, true),
+            'role'       => 'administrator',
+        ));
+        if (!is_wp_error($stranger_id)) {
+            $created_ids[] = (int) $stranger_id;
+            update_user_meta($stranger_id, DEHELED_UM_MANAGED_META, '1');
+            wp_set_current_user((int) $stranger_id);
+            deheled_hub_clear_roster_cache();
+            $stranger_roster = deheled_hub_get_roster(true);
+            ok('an agency account the dashboard has never heard of is refused',
+                is_wp_error($stranger_roster), 'the roster was returned');
+            ok('...saying so plainly, rather than blaming the credential',
+                is_wp_error($stranger_roster) && $stranger_roster->get_error_code() === 'actor_not_on_roster',
+                is_wp_error($stranger_roster) ? $stranger_roster->get_error_code() : '');
+            ok('...which the panel turns into its own state',
+                panel_state($stranger_roster) === 'not_on_roster', panel_state($stranger_roster));
+            wp_set_current_user((int) $before_stranger->ID);
+            deheled_hub_clear_roster_cache();
+            $roster = deheled_hub_get_roster(true);
+        }
 
         // Someone not already on this site, so the preflight has something to
         // say and the assignment has something to do.
-        $target = null;
-        foreach ($members as $m) { if (empty($m['present'])) { $target = $m; break; } }
-
-        // ...and from here the check acts as a real member of staff, which is
-        // what the panel is for. A second roster member, created locally and
-        // marked managed, exactly as the hub would have left them.
-        $actor_member = null;
-        foreach ($members as $m) {
-            if (!$target || $m['id'] !== $target['id']) { $actor_member = $m; break; }
+        $public = deheled_site_users_public_roster($roster);
+        $members = array();
+        foreach ($public['teams'] as $public_team) {
+            foreach ($public_team['members'] as $public_member) $members[] = $public_member;
         }
-        if ($actor_member) {
-            $existing_actor = get_user_by('email', $actor_member['email']);
-            if ($existing_actor) {
-                $tm_actor = (int) $existing_actor->ID;
-            } else {
-                $tm_actor = wp_insert_user(array(
-                    'user_login' => 'de-lc-actor-' . $suffix,
-                    'user_email' => $actor_member['email'],
-                    'user_pass'  => wp_generate_password(32, true, true),
-                    'role'       => 'administrator',
-                ));
-                if (!is_wp_error($tm_actor)) $created_ids[] = (int) $tm_actor;
-            }
-            if (!is_wp_error($tm_actor)) {
-                update_user_meta($tm_actor, DEHELED_UM_MANAGED_META, '1');
-                wp_set_current_user((int) $tm_actor);
-                ok('a roster member using the panel passes the gate',
-                    panel_state($roster) === 'available', panel_state($roster));
-                echo "    acting as " . $actor_member['email'] . "\n";
-            }
+        $target = null;
+        foreach ($members as $m) {
+            if (empty($m['present']) && strtolower($m['email']) !== strtolower($actor_email)) { $target = $m; break; }
         }
 
         if ($target) {

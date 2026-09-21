@@ -32,6 +32,36 @@ if (!defined('ABSPATH')) { exit; }
 define('DEHELED_SITE_USERS_PAGE', 'deheled-team-members');
 const DEHELED_AGENCY_DOMAIN = 'digitalelementsgroup.com';
 
+/**
+ * True only for an address on EXACTLY the agency domain.
+ *
+ * Written out rather than left as a substring comparison, because the rule has
+ * four separate ways to be got wrong and each one is a way in:
+ *
+ *   jeff@digitalelementsgroup.com        yes
+ *   JEFF@DigitalElementsGroup.com        yes  - case, and surrounding space
+ *   jeff@digitalelementsgroup.com.       yes  - a trailing dot is the same host
+ *   jeff@wp.digitalelementsgroup.com     NO   - a subdomain is not the domain
+ *   jeff@digitalelementsgroup.co         NO   - look-alike
+ *   jeff@digital-elementsgroup.com       NO   - look-alike
+ *   jeff@digitalelementsgroup.com.evil   NO   - suffix attack
+ *   a@b.com@digitalelementsgroup.com     NO   - two @, resolves ambiguously
+ *
+ * Split on the LAST "@" and compare the whole domain. Nothing here depends on
+ * where a substring happens to land.
+ */
+function deheled_site_users_is_agency_email($email) {
+    $raw = strtolower(trim((string) $email));
+    if ($raw === '' || strpos($raw, ' ') !== false) return false;
+
+    $at = strrpos($raw, '@');
+    if ($at === false || $at === 0 || $at === strlen($raw) - 1) return false;
+    if (strpos(substr($raw, 0, $at), '@') !== false) return false;
+
+    $domain = rtrim(substr($raw, $at + 1), '.');
+    return $domain === DEHELED_AGENCY_DOMAIN;
+}
+
 /* ============================================================== the gate == */
 
 /**
@@ -82,19 +112,29 @@ function deheled_site_users_gate($roster = null) {
             'You don\'t have permission to manage users on this website.');
     }
 
-    // 4. A Digital Elements account. THE check that keeps a client's own
-    // administrator out — they hold every capability here, so 3 alone is not
-    // enough to tell "our staff" from "the site's owner".
+    // 4. An agency address, on exactly the agency domain.
+    //
+    // NOT the _de_managed flag, which this check used to require. That flag
+    // only exists on an account the dashboard created or linked, so every
+    // colleague whose account predates this tool — most of them, on most of the
+    // forty-odd sites — was refused by name while being on the roster and
+    // administering the site. Linking each person on each site by hand was
+    // never realistic. The hub now decides instead (5 below), and adopts the
+    // account on the way through.
+    //
+    // A WordPress account's email is set by whoever administers this site, so
+    // this is a MISTAKE-GUARD AND A VISIBILITY CONTROL, not a boundary against
+    // a malicious site administrator: they could mint an account claiming any
+    // address here. What actually bounds the damage is the hub's, unchanged —
+    // roster-only assignment, the agency domain, the users:admin scope, the
+    // last-administrator guard — plus the hub's team restriction, which caps
+    // what a spoofed actor could achieve at what a Web Development or Admin
+    // colleague could already do ON THIS ONE SITE.
     $user = wp_get_current_user();
     if (!$user || !$user->ID) {
         return $unavailable('no_permission', 'You don\'t have permission to manage users on this website.');
     }
-    if (!deheled_um_user_is_managed($user->ID)) {
-        return $unavailable('no_permission',
-            'This section is for Digital Elements staff accounts. Your account isn\'t managed by Digital Elements.');
-    }
-    $email = strtolower((string) $user->user_email);
-    if (substr($email, -strlen('@' . DEHELED_AGENCY_DOMAIN)) !== '@' . DEHELED_AGENCY_DOMAIN) {
+    if (!deheled_site_users_is_agency_email($user->user_email)) {
         return $unavailable('no_permission',
             'This section is for @' . DEHELED_AGENCY_DOMAIN . ' accounts.');
     }
@@ -107,6 +147,24 @@ function deheled_site_users_gate($roster = null) {
             if ($code === 'scope_denied') {
                 return $unavailable('plugin_assign_not_granted',
                     'Digital Elements hasn\'t permitted this website to add staff from here. Ask them to enable it for this site.');
+            }
+            // The hub's verdict on the PERSON, which only it can give: the
+            // roster lives there, and so does the team. Each is a different
+            // thing to do about it, so each keeps its own state.
+            if ($code === 'actor_not_on_roster') {
+                return $unavailable('not_on_roster', $roster->get_error_message());
+            }
+            if ($code === 'actor_team_not_allowed') {
+                return $unavailable('team_not_allowed', $roster->get_error_message());
+            }
+            if ($code === 'actor_inactive') {
+                return $unavailable('not_on_roster', $roster->get_error_message());
+            }
+            if ($code === 'plugin_update_required') {
+                return $unavailable('plugin_outdated', $roster->get_error_message());
+            }
+            if ($code === 'actor_not_agency') {
+                return $unavailable('no_permission', $roster->get_error_message());
             }
             return $unavailable('hub_unreachable', $roster->get_error_message());
         }
@@ -276,6 +334,9 @@ function deheled_site_users_state_title($state) {
         'hub_unreachable'           => 'Can\'t reach Digital Elements',
         'roster_empty'              => 'No team members yet',
         'no_permission'             => 'You don\'t have access to this',
+        'not_on_roster'             => 'Not on the Digital Elements roster',
+        'team_not_allowed'          => 'Not available to your team',
+        'plugin_outdated'           => 'This plugin needs updating',
     );
     return isset($titles[$state]) ? $titles[$state] : 'Unavailable';
 }
