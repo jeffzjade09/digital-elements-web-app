@@ -1,5 +1,60 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.7.1 — Team Members: who it lets in
+
+A fix to 2.7.0, released the same day. **Update to this version if you have
+2.7.0** — the panel needs it to work at all.
+
+### What was wrong
+
+Team Members only recognised a Digital Elements colleague if their WordPress
+account had been created, or explicitly linked, by the Digital Elements
+dashboard. Colleagues whose account on a site predates that — most of them, on
+most sites — were turned away with "your account isn't managed by Digital
+Elements", even though the dashboard knows exactly who they are.
+
+### What changed
+
+Who may use the screen is now decided by the Digital Elements dashboard, which
+holds the staff list, rather than by a flag on the WordPress account:
+
+1. the logged-in user can edit users **and** assign roles on this site;
+2. their email is on exactly the digitalelementsgroup.com domain — not a
+   subdomain, and not a look-alike;
+3. the dashboard recognises that address as active staff in the **Web
+   Development** or **Admin** team;
+4. this site's Digital Elements license is present, verified and unexpired;
+5. user management is connected here, this site has allowed account changes, and
+   Digital Elements permits this site to add staff.
+
+Only Web Development and Admin may use it. Everyone else is told so, by name of
+team, rather than being refused without explanation.
+
+**Your own administrators still never see this screen.** Nothing here widens who
+can reach it — a site's own administrator is not on the Digital Elements staff
+list, and that is what is checked.
+
+### Adopting an existing account
+
+The first time a recognised colleague opens the screen, the dashboard adopts the
+WordPress account they are signed in as, so it can be managed from then on. It
+uses the same linking step the dashboard has always used, and records it in the
+activity log.
+
+**It cannot adopt an administrator account unless this site has allowed Digital
+Elements to manage administrator accounts** (DE Monitoring → User management).
+That switch is yours, and this does not go around it: if it is off, the account
+stays unlinked, the refusal is recorded with its reason, and the screen still
+works.
+
+### Also
+
+- Clearer messages when the screen isn't available: not on the staff list, in a
+  team that can't use it, or this plugin needing an update are now three
+  different answers instead of one.
+- The plugin tells the dashboard who is acting on every request, so the activity
+  log names a person rather than just a website.
+
 ## 2.7.0 — Team Members
 
 Adds **DE Monitoring → Team Members**, so a member of Digital Elements staff
