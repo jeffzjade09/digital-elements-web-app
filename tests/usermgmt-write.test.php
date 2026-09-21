@@ -33,6 +33,7 @@ $GLOBALS['__usermeta'] = array();
 $GLOBALS['__users'] = array();
 $GLOBALS['__routes'] = array();
 $GLOBALS['__actions'] = array();
+$GLOBALS['__retrieve_password_calls'] = array();
 $GLOBALS['__filters'] = array('wp_mail' => array(), 'pre_wp_mail' => array());
 $GLOBALS['__rand'] = 2;
 $GLOBALS['__next_id'] = 100;
@@ -168,9 +169,7 @@ function wp_update_user($data) {
  * Treating "the wp_mail filter ran" as evidence of delivery is exactly how a
  * failed send gets reported as a successful one.
  */
-function wp_new_user_notification($id, $dep = null, $notify = '') {
-    $GLOBALS['__notified'][] = array('id' => $id, 'notify' => $notify);
-
+function deheled_test_simulate_mail() {
     // 1. wp_mail filter — always runs, success or not.
     foreach ($GLOBALS['__filters']['wp_mail'] as $cb) $cb(array('to' => 'x'));
 
@@ -188,8 +187,47 @@ function wp_new_user_notification($id, $dep = null, $notify = '') {
         }
     }
 }
+
+function wp_new_user_notification($id, $dep = null, $notify = '') {
+    $GLOBALS['__notified'][] = array('id' => $id, 'notify' => $notify);
+    deheled_test_simulate_mail();
+}
+
+function deheled_test_unused_notification_body($id) {
+    // 1. wp_mail filter — always runs, success or not.
+    foreach ($GLOBALS['__filters']['wp_mail'] as $cb) $cb(array('to' => 'x'));
+
+    // 2. pre_wp_mail — a plugin may short-circuit delivery entirely.
+    if ($GLOBALS['__mail_short'] !== null) {
+        foreach ($GLOBALS['__filters']['pre_wp_mail'] as $cb) $cb($GLOBALS['__mail_short'], array());
+        return;
+    }
+
+    // 3. Core's own outcome hooks.
+    $hook = $GLOBALS['__mail_ok'] ? 'wp_mail_succeeded' : 'wp_mail_failed';
+    if (!empty($GLOBALS['__actions'][$hook])) {
+        foreach ($GLOBALS['__actions'][$hook] as $cb) {
+            $cb($GLOBALS['__mail_ok'] ? array('to' => 'x') : new WP_Error('mail', 'failed'));
+        }
+    }
+}
+/**
+ * Models retrieve_password() closely enough for what is under test: it writes a
+ * NEW activation key — which is what invalidates any previous link — and then
+ * sends mail through the same path everything else does.
+ *
+ * It returns true even when delivery fails, which is the trap: wp_mail() can
+ * return true while a plugin drops the message, so the plugin has to watch the
+ * hooks rather than trust this value.
+ */
 function retrieve_password($login) {
-    if (!$GLOBALS['__mail_ok']) return new WP_Error('mail', 'failed');
+    $GLOBALS['__retrieve_password_calls'][] = $login;
+    foreach ($GLOBALS['__users'] as $u) {
+        if ($u->user_login === $login) {
+            $u->user_activation_key = 'new-key-' . count($GLOBALS['__retrieve_password_calls']);
+        }
+    }
+    deheled_test_simulate_mail();
     return true;
 }
 
@@ -231,6 +269,12 @@ function req($params = array(), $key = null) {
     $key = $key === null ? 'idem-' . (++$IDEM) : $key;
     return new FakeRequest($params, array('idempotency-key' => $key));
 }
+/** The de_code of a refusal, for asserting WHY something was refused. */
+function rcode($response) {
+    $b = body($response);
+    return isset($b['error']['code']) ? $b['error']['code'] : (isset($b['code']) ? $b['code'] : null);
+}
+
 function body($response) {
     return $response instanceof WP_REST_Response ? $response->get_data() : $response;
 }
@@ -331,7 +375,31 @@ ok('it is 32 characters with specials requested', strpos($GLOBALS['__generated_p
 foreach ($GLOBALS['__generated_passwords'] as $pw) {
     ok('the generated password is NOT in the response', strpos($json, $pw) === false);
 }
-ok('no password field of any kind', strpos($json, 'password') === false && strpos($json, 'user_pass') === false);
+ok('no user_pass field of any kind', strpos($json, 'user_pass') === false);
+
+// ONE field in the whole payload may mention a password, and it is a timestamp
+// saying when the person set their own. Asserted by walking every key rather
+// than by searching the text, so a future field called "password_hint" or
+// "temp_password" fails here instead of shipping.
+//
+// The blunter version of this assertion — no key containing "password" at all
+// — is what 2.7.3 had to relax, and relaxing it by hand is the point: the
+// exception is named, and everything else is still refused.
+$offending = array();
+$walk = function ($node, $path = '') use (&$walk, &$offending) {
+    if (!is_array($node)) return;
+    foreach ($node as $key => $value) {
+        $here = $path === '' ? (string) $key : $path . '.' . $key;
+        if (is_string($key) && preg_match('/pass(word)?|pwd|secret|credential/i', $key)) {
+            $allowed = $key === 'password_set_at' && ($value === null || is_int($value));
+            if (!$allowed) $offending[] = $here . '=' . var_export($value, true);
+        }
+        $walk($value, $here);
+    }
+};
+$walk(body($created));
+ok('the only password-ish field is a timestamp called password_set_at',
+   count($offending) === 0, implode(', ', $offending));
 ok('the stored hash is not in the response', strpos($json, 'HASHED') === false);
 eq('WordPress was asked to notify the user', $GLOBALS['__notified'][count($GLOBALS['__notified']) - 1]['notify'], 'user');
 
@@ -608,6 +676,93 @@ ok('...and a code plus a message',
    isset($failure['error']['code']) && isset($failure['error']['message']));
 ok('no server internals in the message',
    strpos($failure['error']['message'], '/') === false && strpos($failure['error']['message'], '.php') === false);
+
+
+/* ------------------------------------------------- invitations (2.7.3) ---- */
+
+echo "\n--- a resend goes through WordPress, and nothing else ---\n";
+
+reset_site();
+$invitee = make_user(array('ID' => 501, 'user_login' => 'jason',
+                           'user_email' => 'jason@digitalelementsgroup.com',
+                           'roles' => array('editor')), true, true);
+$GLOBALS['__retrieve_password_calls'] = array();
+$GLOBALS['__generated_passwords'] = array();
+$GLOBALS['__mail_ok'] = true;
+
+$resend = deheled_um_rest_password_reset(req(array('id' => 501)));
+$resend_body = body($resend);
+
+eq('it asks WordPress to send the link', count($GLOBALS['__retrieve_password_calls']), 1);
+eq('...for the right account', $GLOBALS['__retrieve_password_calls'][0], 'jason');
+ok('it reports success', !empty($resend_body['ok']) && $resend_body['result'] === 'reset');
+eq('with no warnings when delivery was verified', count($resend_body['warnings']), 0);
+
+// The thing this must never do.
+$resend_json = json_encode($resend_body);
+ok('no password anywhere in the response', strpos($resend_json, 'user_pass') === false);
+ok('no activation key anywhere in the response',
+   strpos($resend_json, 'secret-activation-key') === false);
+ok('no reset link anywhere in the response',
+   strpos($resend_json, 'wp-login') === false && strpos($resend_json, 'rp_key') === false);
+eq('no password was generated for a resend', count($GLOBALS['__generated_passwords']), 0);
+
+echo "\n--- delivery is judged the same way as it is for a new account ---\n";
+// retrieve_password() returning true is NOT enough: wp_mail can return true
+// while a plugin silently drops the message. That is how an invitation came to
+// be reported as sent when nobody received it.
+$GLOBALS['__mail_ok'] = false;
+$GLOBALS['__retrieve_password_calls'] = array();
+$failed = body(deheled_um_rest_password_reset(req(array('id' => 501))));
+eq('the link was still requested', count($GLOBALS['__retrieve_password_calls']), 1);
+ok('...but delivery is reported as failed',
+   count($failed['warnings']) === 1 && $failed['warnings'][0]['code'] === 'mail_failed');
+ok('...and it says what the person can do instead',
+   strpos($failed['warnings'][0]['message'], 'Lost Password') !== false);
+$GLOBALS['__mail_ok'] = true;
+
+echo "\n--- an account we did not create is refused ---\n";
+// The rule the reset route has always had, and the reason `unknown` exists as
+// an invitation state: a linked account is the website's own, and mailing a
+// reset link into it is a way into an account that is not ours.
+$GLOBALS['__usermeta'][501]['_de_created'] = '';
+$GLOBALS['__retrieve_password_calls'] = array();
+$linked = deheled_um_rest_password_reset(req(array('id' => 501)));
+eq('refused', code($linked), 'linked_account_protected');
+eq('...without sending anything', count($GLOBALS['__retrieve_password_calls']), 0);
+$GLOBALS['__usermeta'][501]['_de_created'] = '1';
+
+echo "\n--- an unmanaged account is refused ---\n";
+$GLOBALS['__usermeta'][501]['_de_managed'] = '';
+$GLOBALS['__retrieve_password_calls'] = array();
+$unmanaged = deheled_um_rest_password_reset(req(array('id' => 501)));
+eq('refused', code($unmanaged), 'not_managed');
+eq('...without sending anything', count($GLOBALS['__retrieve_password_calls']), 0);
+$GLOBALS['__usermeta'][501]['_de_managed'] = '1';
+
+echo "\n--- completing a reset is recorded, by WordPress's own hooks ---\n";
+unset($GLOBALS['__usermeta'][501]['_de_password_set_at']);
+ok('nothing is stamped before the reset completes',
+   deheled_um_password_set_at(501) === null);
+
+// Both hooks, because WordPress fires them at different points and a site with
+// a plugin that interferes may only reach one.
+foreach (array('password_reset', 'after_password_reset') as $hook) {
+    unset($GLOBALS['__usermeta'][501]['_de_password_set_at']);
+    foreach ($GLOBALS['__actions'][$hook] as $cb) { $cb($GLOBALS['__users'][0]); }
+    ok("$hook stamps the timestamp", deheled_um_password_set_at(501) !== null);
+    ok("...as a number, not anything from the form", is_int(deheled_um_password_set_at(501)));
+}
+
+echo "\n--- what the dashboard is told about activation ---\n";
+$shape_pending = deheled_um_user_shape($GLOBALS['__users'][0]);
+ok('the activation key never leaves the site',
+   !array_key_exists('user_activation_key', $shape_pending)
+   && strpos(json_encode($shape_pending), 'secret-activation-key') === false);
+ok('only whether one is outstanding', array_key_exists('activation_pending', $shape_pending));
+ok('...as a boolean', is_bool($shape_pending['activation_pending']));
+ok('and whether we created the account', $shape_pending['created_by_us'] === true);
+ok('and when they set a password', is_int($shape_pending['password_set_at']));
 
 echo "\n";
 echo $FAIL ? "$FAIL assertion(s) failed\n" : "All assertions passed\n";

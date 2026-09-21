@@ -28,6 +28,10 @@ if (!defined('ABSPATH')) { exit; }
 
 /** User meta marking an account as managed by Digital Elements. */
 define('DEHELED_UM_MANAGED_META', '_de_managed');
+/** Did WE create this account, or did we merely adopt one the site already had? */
+define('DEHELED_UM_CREATED_META', '_de_created');
+/** When this person set their own password. Stamped by WordPress's own hooks. */
+define('DEHELED_UM_PASSWORD_SET_META', '_de_password_set_at');
 
 const DEHELED_UM_MAX_PER_PAGE = 100;
 
@@ -195,11 +199,58 @@ function deheled_um_user_shape($user) {
         // Lets the dashboard warn before demoting the last administrator,
         // without disclosing who the other administrators are.
         'is_site_admin' => deheled_um_user_has_role_matching($user, 'deheled_um_role_is_site_admin'),
+
+        // ---- invitation status (2.7.3) -----------------------------------
+        //
+        // This shape used to say "_de_managed is the only user meta this
+        // endpoint reads or reports", and first_name/last_name were removed to
+        // make that true. Widening it is deliberate and limited to what answers
+        // one question: did the person we invited ever get in?
+        //
+        // Three things, and nothing else:
+        'created_by_us'      => deheled_um_user_was_created_by_us($user->ID),
+        'password_set_at'    => deheled_um_password_set_at($user->ID),
+        // A BOOLEAN derived from user_activation_key. The key itself never
+        // leaves this site: it is the credential that would let anyone reset
+        // this account's password, and the dashboard has no use for it that
+        // could justify the risk of holding a copy.
+        'activation_pending' => deheled_um_activation_pending($user),
     );
+}
+
+/** When this person set their own password, or null if we never saw it happen. */
+function deheled_um_password_set_at($user_id) {
+    $at = get_user_meta((int) $user_id, DEHELED_UM_PASSWORD_SET_META, true);
+    return $at ? (int) $at : null;
+}
+
+/**
+ * Is there still an unused password-setup link outstanding?
+ *
+ * WordPress writes user_activation_key when it sends a set-password or reset
+ * email, and clears it when the reset completes. So a key that is still there
+ * means nobody has acted on the invitation yet — which for an account we
+ * created means the person has never signed in, because the password we
+ * generated was never disclosed to anyone.
+ */
+function deheled_um_activation_pending($user) {
+    if (!($user instanceof WP_User)) return false;
+    return isset($user->user_activation_key) && $user->user_activation_key !== '';
 }
 
 function deheled_um_user_is_managed($user_id) {
     return get_user_meta((int) $user_id, DEHELED_UM_MANAGED_META, true) === '1';
+}
+
+/**
+ * Did we create this account?
+ *
+ * A stronger claim than "managed", and deliberately never cleared: an account
+ * we merely linked is the website's own, which is why the reset route refuses
+ * it. See um-write.php.
+ */
+function deheled_um_user_was_created_by_us($user_id) {
+    return get_user_meta((int) $user_id, DEHELED_UM_CREATED_META, true) === '1';
 }
 
 function deheled_um_user_has_role_matching($user, $predicate) {

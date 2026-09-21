@@ -59,6 +59,9 @@ function translate_user_role($n) { return $n; }
 function add_action($hook, $cb, $prio = 10, $args = 1) { $GLOBALS['__actions'][$hook][] = $cb; }
 function rest_ensure_response($d) { return $d; }
 function get_user_meta($id, $key, $single = false) {
+    // Recorded so a test can assert WHICH meta keys were read, not merely that
+    // their values didn't show up in the output.
+    if (isset($GLOBALS['__meta_reads'])) $GLOBALS['__meta_reads'][] = $key;
     return isset($GLOBALS['__usermeta'][$id][$key]) ? $GLOBALS['__usermeta'][$id][$key] : '';
 }
 function register_rest_route($ns, $route, $args) { $GLOBALS['__routes']["$ns$route"] = $args; }
@@ -207,7 +210,8 @@ $json = json_encode($shape);
 
 eq("exactly the intended fields, and no others",
    implode(',', array_keys($shape)),
-   'id,login,email,display_name,roles,managed,registered,is_admin_like,is_site_admin');
+   'id,login,email,display_name,roles,managed,registered,is_admin_like,is_site_admin,'
+   . 'created_by_us,password_set_at,activation_pending');
 
 foreach (array('user_pass', 'user_activation_key', 'user_status', 'user_nicename', 'user_url') as $forbidden) {
     ok("$forbidden is absent", !array_key_exists($forbidden, $shape));
@@ -222,16 +226,36 @@ eq("roles is a list", implode(',', $shape['roles']), 'editor');
 eq("managed reflects the meta flag", $shape['managed'], true);
 eq("registered is reported", $shape['registered'], '2026-01-02 03:04:05');
 
-// _de_managed is the ONLY user meta this endpoint reads, so nothing else in
-// the meta table can reach a response — not even innocuous fields.
+// THREE user meta keys are read here and no others: _de_managed, _de_created,
+// and _de_password_set_at. Nothing else in the meta table can reach a response
+// — not even innocuous fields.
+//
+// This assertion is the reason the shape has stayed narrow. 2.7.3 widened it
+// deliberately, to answer "did the person we invited ever get in?", and the
+// list below is what makes the NEXT widening deliberate too rather than
+// something that happens by accident.
 $GLOBALS['__usermeta'][7]['session_tokens'] = 'a:1:{s:4:"tok";}';
 $GLOBALS['__usermeta'][7]['secret_client_note'] = 'do not share';
 $GLOBALS['__usermeta'][7]['first_name'] = 'Jason';
+$GLOBALS['__usermeta'][7]['billing_address'] = '12 Client Street';
+$GLOBALS['__usermeta'][7]['wp_capabilities'] = 'a:1:{s:6:"editor";b:1;}';
 $json2 = json_encode(deheled_um_user_shape($GLOBALS['__users'][0]));
 ok("unrelated meta is not disclosed", strpos($json2, 'do not share') === false);
 ok("session tokens are not disclosed", strpos($json2, 'session_tokens') === false);
 ok("not even name meta is disclosed", strpos($json2, 'Jason') === false || strpos($json2, 'first_name') === false);
 ok("no meta key other than the managed flag is read", strpos($json2, 'first_name') === false);
+ok("an address a client stored is not disclosed", strpos($json2, '12 Client Street') === false);
+
+// Asserted against what was actually READ, not against the output: a field
+// could be renamed on the way out and still have come from somewhere it
+// shouldn't. deheled_um_user_shape() is the only caller under test here, so
+// every get_user_meta() it makes is recorded.
+$GLOBALS['__meta_reads'] = array();
+deheled_um_user_shape($GLOBALS['__users'][0]);
+$read = array_values(array_unique($GLOBALS['__meta_reads']));
+sort($read);
+eq("exactly three meta keys are read, by name",
+   implode(',', $read), '_de_created,_de_managed,_de_password_set_at');
 
 echo "\n--- the managed flag ---\n";
 ok("a flagged user reads as managed", deheled_um_user_is_managed(7));
@@ -294,7 +318,8 @@ $found = deheled_um_rest_user_lookup(new FakeRequest(array('email' => 'jason@dig
 ok("finds by email", $found['exists']);
 eq("...and says how", $found['matched'], 'email');
 eq("...returning the safe shape", implode(',', array_keys($found['user'])),
-   'id,login,email,display_name,roles,managed,registered,is_admin_like,is_site_admin');
+   'id,login,email,display_name,roles,managed,registered,is_admin_like,is_site_admin,'
+   . 'created_by_us,password_set_at,activation_pending');
 
 $upper = deheled_um_rest_user_lookup(new FakeRequest(array('email' => 'JASON@DigitalElementsGroup.com')));
 ok("email matching is case-insensitive", $upper['exists']);

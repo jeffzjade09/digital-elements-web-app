@@ -53,11 +53,29 @@ if (!defined('ABSPATH')) { exit; }
  * reasonable for an account we made for a member of staff, and is not
  * reasonable for a client's own Editor that we were permitted to re-role.
  */
-define('DEHELED_UM_CREATED_META', '_de_created');
 
-function deheled_um_user_was_created_by_us($user_id) {
-    return get_user_meta((int) $user_id, DEHELED_UM_CREATED_META, true) === '1';
+
+/**
+ * Records that someone completed a password reset.
+ *
+ * WordPress fires these when the reset form is submitted successfully, which is
+ * the only moment anyone can observe from outside that an invitation was acted
+ * on. Before this existed the dashboard had to infer it from the activation key
+ * having been cleared — still true, still used for older accounts, but an
+ * inference rather than an observation, and the two are reported separately so
+ * nobody has to guess which they are looking at.
+ *
+ * Stamped for every account, not only ours: the hook is cheap, and an account
+ * we link later is more useful with the timestamp already on it than without.
+ * The value is a timestamp. Nothing about the password, the key or the form is
+ * read, stored or transmitted.
+ */
+function deheled_um_stamp_password_set($user) {
+    $id = ($user instanceof WP_User) ? (int) $user->ID : (int) $user;
+    if ($id > 0) update_user_meta($id, DEHELED_UM_PASSWORD_SET_META, time());
 }
+add_action('password_reset', 'deheled_um_stamp_password_set', 10, 1);
+add_action('after_password_reset', 'deheled_um_stamp_password_set', 10, 1);
 
 add_action('rest_api_init', function () {
     register_rest_route(DEHELED_UM_NAMESPACE, '/users', array(
@@ -358,32 +376,53 @@ function deheled_um_rest_create_user($request) {
  * site with broken mail is a site whose users use the ordinary Lost Password
  * flow, not one where we email plaintext credentials around.
  */
-function deheled_um_notify_new_user($user_id) {
+/**
+ * Starts watching wp_mail, and returns the handle to stop with.
+ *
+ * Extracted so the invitation and the resend judge delivery by exactly the same
+ * evidence. They used not to: creation watched the hooks, while the resend
+ * trusted retrieve_password()'s return value — which reports wp_mail()'s
+ * verdict, and wp_mail() can return true while a plugin silently drops the
+ * message. Two paths answering "was it sent?" differently is how a person ends
+ * up waiting for an email the dashboard says they received.
+ */
+function deheled_um_watch_mail() {
     $state = array('attempted' => false, 'succeeded' => false, 'failed' => false,
                    'short_circuited' => false, 'short_value' => null);
 
-    $on_attempt = function ($atts) use (&$state) { $state['attempted'] = true; return $atts; };
+    $handle = array('state' => &$state);
+    $handle['on_attempt'] = function ($atts) use (&$state) { $state['attempted'] = true; return $atts; };
     // Observed at the lowest priority so we see the FINAL short-circuit value,
     // after any mail plugin has had its say.
-    $on_short = function ($pre, $atts = null) use (&$state) {
+    $handle['on_short'] = function ($pre, $atts = null) use (&$state) {
         $state['short_circuited'] = true;
         $state['short_value'] = $pre;
         return $pre;
     };
-    $on_ok = function ($info) use (&$state) { $state['succeeded'] = true; };
-    $on_fail = function ($err) use (&$state) { $state['failed'] = true; };
+    $handle['on_ok']   = function ($info) use (&$state) { $state['succeeded'] = true; };
+    $handle['on_fail'] = function ($err) use (&$state) { $state['failed'] = true; };
 
-    add_filter('wp_mail', $on_attempt, PHP_INT_MAX);
-    add_filter('pre_wp_mail', $on_short, PHP_INT_MAX, 2);
-    add_action('wp_mail_succeeded', $on_ok);
-    add_action('wp_mail_failed', $on_fail);
+    add_filter('wp_mail', $handle['on_attempt'], PHP_INT_MAX);
+    add_filter('pre_wp_mail', $handle['on_short'], PHP_INT_MAX, 2);
+    add_action('wp_mail_succeeded', $handle['on_ok']);
+    add_action('wp_mail_failed', $handle['on_fail']);
 
+    return $handle;
+}
+
+/** Stops watching and returns what was observed, for deheled_um_mail_delivered(). */
+function deheled_um_stop_watching_mail($handle) {
+    remove_filter('wp_mail', $handle['on_attempt'], PHP_INT_MAX);
+    remove_filter('pre_wp_mail', $handle['on_short'], PHP_INT_MAX);
+    remove_action('wp_mail_succeeded', $handle['on_ok']);
+    remove_action('wp_mail_failed', $handle['on_fail']);
+    return $handle['state'];
+}
+
+function deheled_um_notify_new_user($user_id) {
+    $handle = deheled_um_watch_mail();
     wp_new_user_notification($user_id, null, 'user');
-
-    remove_filter('wp_mail', $on_attempt, PHP_INT_MAX);
-    remove_filter('pre_wp_mail', $on_short, PHP_INT_MAX);
-    remove_action('wp_mail_succeeded', $on_ok);
-    remove_action('wp_mail_failed', $on_fail);
+    $state = deheled_um_stop_watching_mail($handle);
 
     if (deheled_um_mail_delivered($state)) return array();
 
@@ -595,8 +634,22 @@ function deheled_um_rest_password_reset($request) {
             );
         }
 
+        // Sending a new link invalidates the previous one, because
+        // retrieve_password() overwrites user_activation_key. That is
+        // WordPress's own mechanism and there is deliberately nothing of ours
+        // beside it: no second key, no expiry we maintain, nothing to fall out
+        // of step with the only copy that matters.
+        //
+        // Delivery is judged the way creation judges it — by watching the mail
+        // hooks — rather than by trusting the return value. retrieve_password()
+        // reports on wp_mail()'s verdict, and wp_mail() can return true while a
+        // plugin silently drops the message. That is exactly how an invitation
+        // came to be reported as sent when nobody received it.
+        $handle = deheled_um_watch_mail();
         $result = retrieve_password($user->user_login);
-        if (is_wp_error($result)) {
+        $delivered = deheled_um_mail_delivered(deheled_um_stop_watching_mail($handle));
+
+        if (is_wp_error($result) || !$delivered) {
             return rest_ensure_response(deheled_um_ok('reset', $user, array(array(
                 'code' => 'mail_failed',
                 'message' => 'This website couldn\'t send the reset email. The user can use the Lost Password link instead.',

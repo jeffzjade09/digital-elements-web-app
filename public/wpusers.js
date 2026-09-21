@@ -411,8 +411,14 @@ function wpuRenderUsers() {
         if (!mine.length) return '<span class="wpu-chip none">none</span>';
         const failed = mine.filter((a) => a.state === "failed").length;
         const ok = mine.filter((a) => ["synced", "updated", "linked"].includes(a.state)).length;
+        // An invitation nobody acted on matters as much as a failed sync: the
+        // account exists and the person still can't use it.
+        const waiting = mine.filter((a) => a.invite && a.invite.state === "pending_setup").length;
+        const undelivered = mine.filter((a) => a.invite && a.invite.state === "delivery_failed").length;
         return `<span class="wpu-chip ${ok ? "ok" : "none"}">${ok}/${mine.length} synced</span>` +
-               (failed ? ` <span class="wpu-chip bad">${failed} failed</span>` : "");
+               (failed ? ` <span class="wpu-chip bad">${failed} failed</span>` : "") +
+               (undelivered ? ` <span class="wpu-chip bad" title="The set-password email couldn't be delivered">${undelivered} not delivered</span>` : "") +
+               (waiting ? ` <span class="wpu-chip warn" title="Invited, but they haven't set a password yet">${waiting} waiting</span>` : "");
       })()}</td>
       <td data-label="Status">
         ${u.status === "disabled" ? '<span class="wpu-chip disabled">Disabled</span>' : '<span class="wpu-chip">Active</span>'}
@@ -420,6 +426,7 @@ function wpuRenderUsers() {
       </td>
       <td class="wpu-actions">
         <button class="wpu-linkbtn" onclick="wpuStartAssign({ staffIds: ['${escJs(u.id)}'] })">Websites…</button>
+        <button class="wpu-linkbtn" onclick="wpuOpenInvites('${escJs(u.id)}')">Invitations…</button>
         <button class="wpu-linkbtn" onclick="wpuEditUser('${escJs(u.id)}')">Edit</button>
         <button class="wpu-linkbtn danger" onclick="wpuStartDelete('${escJs(u.id)}')">Delete from websites…</button>
         <button class="wpu-linkbtn" onclick="wpuDeleteUser('${escJs(u.id)}')">Take off roster</button>
@@ -970,6 +977,93 @@ function wpuAssignSubject() {
     return u ? u.label : "1 person";
   }
   return `${n} people`;
+}
+
+/* ----------------------------------------------------------- invitations --- */
+
+/**
+ * Where one person's invitation stands, per website.
+ *
+ * Creating an account sends WordPress's set-password email and then says
+ * nothing more, so the failure this screen exists for is silent: somebody waits
+ * for a message that was never delivered, and the first anyone hears of it is
+ * them saying so.
+ */
+function wpuOpenInvites(staffId) {
+  const person = WPU.users.find((u) => u.id === staffId);
+  WPU_INVITES.staffId = staffId;
+  wpuOpenModal({
+    eyebrow: "Invitations",
+    title: person ? `${person.label}'s invitations` : "Invitations",
+    body: wpuInvitesBody(),
+    actions: '<button class="btn-ghost" onclick="wpuCloseModal()">Close</button>',
+  });
+}
+
+function wpuInvitesBody() {
+  const mine = wpuAssignmentsFor(WPU_INVITES.staffId);
+  if (!mine.length) {
+    return '<div class="wpu-empty">They aren\'t on any websites yet.</div>';
+  }
+
+  const rows = mine.map((a) => {
+    const inv = a.invite || {};
+    const chip = inv.state === "activated" ? "ok"
+      : inv.state === "delivery_failed" ? "bad"
+      : inv.state === "pending_setup" ? "warn" : "none";
+
+    // An ACTIVATED we inferred from a cleared activation key is weaker evidence
+    // than one our own hook observed. Both say "Active"; the tooltip says which,
+    // because that is what someone debugging a specific account needs.
+    const title = inv.signal === "meta"
+      ? "Observed: they completed a password reset."
+      : inv.signal === "key_cleared"
+        ? "Inferred: their set-password link has been used. This account was invited before we recorded resets directly."
+        : "";
+
+    const action = inv.canResend
+      ? `<button class="wpu-linkbtn" onclick="wpuResendInvite('${escJs(a.websiteId)}')">Resend</button>`
+      // An absent button reads as a bug, so it says why and names what the
+      // person can do instead.
+      : inv.why ? `<span class="wpu-note">${esc(inv.why)}</span>` : "";
+
+    return `<tr>
+      <td data-label="Website"><span class="wpu-name">${esc(a.websiteName || "—")}</span></td>
+      <td data-label="Invitation">
+        <span class="wpu-chip ${chip}"${title ? ` title="${esc(title)}"` : ""}>${esc(inv.label || "—")}</span>
+        ${inv.count > 1 ? ` <span class="wpu-sub">sent ${inv.count}×</span>` : ""}
+      </td>
+      <td class="wpu-actions">${action}</td>
+    </tr>`;
+  }).join("");
+
+  return `<table class="wpu-table"><thead><tr>
+      <th>Website</th><th>Invitation</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <div class="wpu-note" style="margin-top:10px">
+      Resending emails a fresh set-password link from the website itself. Any earlier
+      link stops working. We never see or store the link or a password.
+    </div>`;
+}
+
+async function wpuResendInvite(websiteId) {
+  wpuModalError("");
+  try {
+    const res = await wpuApi(`/invite/${encodeURIComponent(WPU_INVITES.staffId)}/${encodeURIComponent(websiteId)}/resend`,
+                             { method: "POST" });
+    // Refreshed from the server rather than assumed: whether the email actually
+    // went is the whole question, and only the site can answer it.
+    const assigned = await wpuApi("/assignments");
+    WPU.assignments = assigned.assignments || [];
+    const panel = document.querySelector("#wpuModal .modal-form");
+    if (panel) panel.innerHTML = wpuInvitesBody();
+    wpuModalError(res.delivered
+      ? `Sent to ${res.email}.`
+      : `${res.email}: the website couldn't confirm the email was sent.`);
+    wpuRenderUsers();
+  } catch (err) {
+    wpuModalError(err.message);
+  }
 }
 
 /* ------------------------------------------------------- website picker --- */
@@ -1840,9 +1934,22 @@ async function wpuRenderSync(force) {
       .map(([k, n]) => `<span class="wpu-chip ${k === "failed" ? "bad" : k === "synced" || k === "updated" ? "ok" : "none"}">${n} ${esc(k)}</span>`)
       .join(" ");
 
+    // Drift and undelivered invitations, on the one screen someone looks at to
+    // find out whether an estate is healthy. Both are silent failures: nothing
+    // errors, the numbers simply stop being true.
+    const d = x.drift || {};
+    const inv = x.invites || {};
+    const problems = [
+      d.removedExternally ? `<span class="wpu-chip warn" title="Removed in WP Admin, outside the dashboard">${d.removedExternally} removed outside the dashboard</span>` : "",
+      d.roleChanged ? `<span class="wpu-chip warn" title="Role changed on the website, outside the dashboard">${d.roleChanged} role changed</span>` : "",
+      inv.deliveryFailed ? `<span class="wpu-chip bad" title="The set-password email couldn't be delivered — these people never got one">${inv.deliveryFailed} invitation${inv.deliveryFailed === 1 ? "" : "s"} not delivered</span>` : "",
+      inv.pendingSetup ? `<span class="wpu-chip warn" title="Invited, but they haven't set a password yet">${inv.pendingSetup} waiting to set a password</span>` : "",
+    ].filter(Boolean).join(" ");
+
     return `
       <tr>
-        <td data-label="Website"><span class="wpu-name">${esc(x.name)}</span><span class="wpu-sub">${esc(x.url)}</span></td>
+        <td data-label="Website"><span class="wpu-name">${esc(x.name)}</span><span class="wpu-sub">${esc(x.url)}</span>
+          ${problems ? `<div style="margin-top:6px">${problems}</div>` : ""}</td>
         <td data-label="Status"><span class="wpu-chip ${esc(state.cls)}" title="${esc(x.message || "")}">${esc(state.label)}</span></td>
         <td data-label="Plugin">${x.pluginVersion
           ? `<span class="wpu-chip role${x.needsPluginUpdate ? " admin-like" : ""}">${esc(x.pluginVersion)}</span>`
@@ -1946,6 +2053,7 @@ async function wpuRenderSync(force) {
 
 /* -------------------------------------------------------- activity log --- */
 
+const WPU_INVITES = { staffId: null };
 const WPU_AUDIT = { filters: { entityType: "", website: "", actor: "", action: "" }, facets: null, entries: [], expanded: new Set() };
 
 /**

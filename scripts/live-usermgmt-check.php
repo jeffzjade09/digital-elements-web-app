@@ -83,6 +83,14 @@ if (!$is_local) {
     exit(1);
 }
 
+/** A signed-shaped request for the password-reset route, as the hub sends it. */
+function live_reset_request($user_id) {
+    $req = new WP_REST_Request('POST', '/de/v2/users/' . $user_id . '/password-reset');
+    $req->set_param('id', $user_id);
+    $req->set_header('idempotency-key', 'live-resend-' . $user_id . '-' . wp_rand(1000, 9999));
+    return $req;
+}
+
 $fail = 0;
 function ok($label, $cond, $extra = '') {
     global $fail;
@@ -328,7 +336,9 @@ ok('no session tokens', strpos($users_json, 'session_tokens') === false);
 if (!empty($users_body['users'])) {
     $first = $users_body['users'][0];
     ok('each user has exactly the intended fields',
-        implode(',', array_keys($first)) === 'id,login,email,display_name,roles,managed,registered,is_admin_like,is_site_admin',
+        implode(',', array_keys($first)) ===
+            'id,login,email,display_name,roles,managed,registered,is_admin_like,is_site_admin,'
+            . 'created_by_us,password_set_at,activation_pending',
         implode(',', array_keys($first)));
     ok('managed is a boolean', is_bool($first['managed']));
     ok('an untouched site reports nobody as managed', $first['managed'] === false);
@@ -447,9 +457,18 @@ ok('...with a username from the email local part',
 // word appears nowhere else.
 $create_json = wp_json_encode($create);
 $without_warnings = wp_json_encode(array_diff_key($create, array('warnings' => 1)));
+// 2.7.3 added password_set_at — a timestamp saying when the person set their
+// own password — so the blunt "the word must not appear" rule is now stated as
+// what it always meant: no password VALUE, no user_pass, and exactly one key
+// allowed to mention one.
+$pw_stripped = str_replace('"password_set_at":null', '', $without_warnings);
+$pw_stripped = preg_replace('/"password_set_at":\d+/', '', $pw_stripped);
 ok('no password value or field outside the warning text',
-    stripos($without_warnings, 'password') === false && strpos($without_warnings, 'user_pass') === false,
-    $without_warnings);
+    stripos($pw_stripped, 'password') === false && strpos($pw_stripped, 'user_pass') === false,
+    $pw_stripped);
+ok('...and the one field that mentions it is a timestamp or null',
+    !array_key_exists('user', $create) || $create['user']['password_set_at'] === null
+        || is_int($create['user']['password_set_at']));
 ok('no password hash in the response',
     strpos($create_json, '$P$') === false && strpos($create_json, '$wp$') === false);
 ok('the stored hash is a real hash, not something we chose',
@@ -680,8 +699,10 @@ ok('...pointing the user at Lost Password',
 // The whole point: a broken mail transport never becomes a reason to disclose
 // a password.
 $nomail_without_warnings = wp_json_encode(array_diff_key($nomail, array('warnings' => 1)));
+$nomail_pw_stripped = str_replace('"password_set_at":null', '', $nomail_without_warnings);
+$nomail_pw_stripped = preg_replace('/"password_set_at":\d+/', '', $nomail_pw_stripped);
 ok('...and STILL no password outside the warning text',
-    stripos($nomail_without_warnings, 'password') === false);
+    stripos($nomail_pw_stripped, 'password') === false);
 ok('...no generated credential in the payload', strpos(wp_json_encode($nomail), '$P$') === false);
 
 echo "\n=== The mail verdict handles every observable outcome ===\n";
@@ -1451,6 +1472,98 @@ if (!$hub_live) {
             }
         } else {
             echo "[every roster member is already on this site - nothing new to assign]\n";
+        }
+
+        echo "\n--- the invitation, from sent to used ---\n";
+        // The failure this covers is silent: the set-password email never
+        // arrives, the account sits there unusable, and the first anyone hears
+        // is the colleague saying so. Every step below is checked against the
+        // real WordPress user, not against what the dashboard believes.
+        if ($target && isset($made) && $made) {
+            $invitee_id = (int) $made->ID;
+            clean_user_cache($invitee_id);
+            $invitee = get_user_by('id', $invitee_id);
+
+            ok('the new account has an unused set-password link',
+                deheled_um_activation_pending($invitee),
+                'user_activation_key is empty');
+            ok('...and nobody has set a password yet',
+                deheled_um_password_set_at($invitee_id) === null);
+            ok('...which is why it cannot be signed into',
+                // Nothing to sign in WITH: the password we generated was never
+                // disclosed to anyone, which is the whole reason there is no
+                // login gate or forced-reset flag.
+                $invitee->user_pass !== '' && !isset($GLOBALS['deheled_live_disclosed_password']));
+
+            $view = deheled_site_users_invite_view(deheled_site_users_observe($target['email']));
+            eq_int('the panel calls it pending', $view['state'] === 'pending_setup' ? 1 : 0, 1);
+            ok('...in plain words', $view['label'] === 'Waiting for them to set a password', $view['label']);
+            ok('...and offers a resend', $view['canResend'] === true);
+
+            echo "\n--- the user completes the reset, as they actually would ---\n";
+            // WordPress's own path: check the key, then reset. Both hooks fire,
+            // and the key is cleared as a side effect.
+            $key = get_password_reset_key($invitee);
+            ok('WordPress issues a reset key', !is_wp_error($key));
+            if (!is_wp_error($key)) {
+                $checked = check_password_reset_key($key, $invitee->user_login);
+                ok('...and accepts it', !is_wp_error($checked));
+                reset_password($checked, wp_generate_password(24, true, true));
+                clean_user_cache($invitee_id);
+                wp_cache_delete($invitee_id, 'user_meta');
+
+                ok('our hook recorded that they set a password',
+                    deheled_um_password_set_at($invitee_id) !== null);
+                $after_reset = get_user_by('id', $invitee_id);
+                ok('...and WordPress cleared the link',
+                    !deheled_um_activation_pending($after_reset));
+
+                $view2 = deheled_site_users_invite_view(deheled_site_users_observe($target['email']));
+                ok('the panel now says Active', $view2['label'] === 'Active', $view2['label']);
+                eq_int('...from the observed signal, not an inference',
+                    $view2['signal'] === 'meta' ? 1 : 0, 1);
+                ok('...and no longer offers a resend', $view2['canResend'] === false);
+
+                // The old key must be dead. reset_password() clears it, which
+                // is the same mechanism a resend relies on.
+                $stale = check_password_reset_key($key, $invitee->user_login);
+                ok('the used link no longer works', is_wp_error($stale),
+                    'the key still validates');
+            }
+
+            echo "\n--- a resend invalidates the previous link ---\n";
+            $first_key = get_password_reset_key(get_user_by('id', $invitee_id));
+            if (!is_wp_error($first_key)) {
+                ok('a link is outstanding again', !is_wp_error(
+                    check_password_reset_key($first_key, $invitee->user_login)));
+
+                // Exactly what the Resend button does, through the same route.
+                $resend_body = rbody(deheled_um_rest_password_reset(live_reset_request($invitee_id)));
+                ok('the resend is accepted', !empty($resend_body['ok']), wp_json_encode($resend_body));
+
+                clean_user_cache($invitee_id);
+                $stale_after_resend = check_password_reset_key($first_key, $invitee->user_login);
+                ok('the EARLIER link stopped working', is_wp_error($stale_after_resend),
+                    'the old key still validates after a resend');
+
+                $json = wp_json_encode($resend_body);
+                ok('no password in the reply', strpos($json, 'user_pass') === false);
+                ok('no reset key in the reply', strpos($json, $first_key) === false);
+                ok('no reset link in the reply', strpos($json, 'wp-login') === false);
+            }
+
+            echo "\n--- an account we did not create is refused, and says why ---\n";
+            delete_user_meta($invitee_id, '_de_created');
+            $refused = rbody(deheled_um_rest_password_reset(live_reset_request($invitee_id)));
+            ok('refused', empty($refused['ok']));
+            ok('...as a linked account',
+                isset($refused['error']['code']) && $refused['error']['code'] === 'linked_account_protected',
+                wp_json_encode($refused));
+            $unknown_view = deheled_site_users_invite_view(deheled_site_users_observe($target['email']));
+            eq_int('the panel calls it unknown', $unknown_view['state'] === 'unknown' ? 1 : 0, 1);
+            ok('...and explains the missing button',
+                strpos($unknown_view['why'], 'Lost your password?') !== false, $unknown_view['why']);
+            update_user_meta($invitee_id, '_de_created', '1');
         }
 
         echo "\n--- deleted in WP Admin, and the dashboard finds out ---\n";

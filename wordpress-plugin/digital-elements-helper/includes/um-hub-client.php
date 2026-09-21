@@ -256,6 +256,21 @@ function deheled_hub_assign($staff_ids, $role, $idempotency_key, $confirm_admin 
     ));
 }
 
+/**
+ * Asks the dashboard to send a fresh set-password link to one colleague.
+ *
+ * The dashboard then calls back into this site's own de/v2 password-reset
+ * route, so WordPress generates and mails the link exactly as it does for a new
+ * account — and, in doing so, invalidates the previous one. Nothing about the
+ * link or a password travels in either direction.
+ */
+function deheled_hub_resend_invite($staff_user_id) {
+    return deheled_hub_request('POST', '/invite/resend', array(
+        'body'    => array_merge(deheled_hub_actor_fields(), array('staffUserId' => (string) $staff_user_id)),
+        'timeout' => 30,
+    ));
+}
+
 function deheled_hub_job($job_id) {
     $job_id = preg_replace('/[^a-zA-Z0-9\-]/', '', (string) $job_id);
     if ($job_id === '') return new WP_Error('bad_request', 'No job to check.');

@@ -48,3 +48,14 @@
 .deheled-tm-others .description { margin: 8px 0; }
 
 .deheled-tm-unavailable h2 { margin-top: 0; }
+
+/* Invitation status, on a member who is already on this site. */
+.deheled-tm-invite-action { display: block; margin-top: 4px; }
+.deheled-tm-why {
+  display: block;
+  margin-top: 4px;
+  color: #646970;
+  font-size: 12px;
+  max-width: 52ch;
+}
+.deheled-tm-chip.warn { background: #fcf9e8; border-color: #dba617; color: #8a6d0b; }

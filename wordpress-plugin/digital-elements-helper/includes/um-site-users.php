@@ -363,13 +363,20 @@ function deheled_site_users_state_title($state) {
 function deheled_site_users_observe($email) {
     $user = is_email($email) ? get_user_by('email', $email) : false;
     if (!$user) {
-        return array('present' => false, 'roles' => array(), 'managed' => false, 'wpUserId' => 0);
+        return array('present' => false, 'roles' => array(), 'managed' => false, 'wpUserId' => 0,
+                     'createdByUs' => false, 'passwordSetAt' => null, 'activationPending' => false);
     }
     return array(
         'present'  => true,
         'roles'    => array_values(array_map('strval', (array) $user->roles)),
         'managed'  => deheled_um_user_is_managed($user->ID),
         'wpUserId' => (int) $user->ID,
+        // Whether the invitation we sent was ever acted on. Three facts, the
+        // same three the de/v2 user shape reports, and nothing about the
+        // password or the activation key itself.
+        'createdByUs'       => deheled_um_user_was_created_by_us($user->ID),
+        'passwordSetAt'     => deheled_um_password_set_at($user->ID),
+        'activationPending' => deheled_um_activation_pending($user),
     );
 }
 
@@ -422,6 +429,10 @@ function deheled_site_users_public_roster($roster) {
                 'present' => $seen['present'],
                 'roles'   => $seen['roles'],
                 'managed' => $seen['managed'],
+                // Invitation status for THIS site, computed here rather than
+                // taken from the hub: the answer lives in this site's user
+                // table, which is the same reason presence is computed here.
+                'invite'  => deheled_site_users_invite_view($seen),
                 // Kept so the panel can say "the dashboard thought this person
                 // was here" rather than silently showing a different list.
                 'hubThought' => !empty($m['onThisSite']['present']),
@@ -439,6 +450,50 @@ function deheled_site_users_public_roster($roster) {
     return array(
         'teams'     => $teams,
         'siteRoles' => isset($roster['siteRoles']) ? $roster['siteRoles'] : array(),
+    );
+}
+
+/**
+ * What to say about one member's invitation, and whether Resend is offered.
+ *
+ * The same five states and the same sentences the dashboard uses, because two
+ * screens describing the same account differently is how someone ends up
+ * resending an invitation that already worked.
+ *
+ * `signal` is reported so an ACTIVATED that was inferred from a cleared
+ * activation key can be told apart from one our own hook observed. They mean
+ * different degrees of certainty and whoever is debugging a specific account
+ * needs to know which they are looking at.
+ */
+function deheled_site_users_invite_view($seen) {
+    if (empty($seen['present'])) {
+        return array('state' => null, 'label' => '', 'canResend' => false, 'why' => '', 'signal' => null);
+    }
+    if (empty($seen['createdByUs'])) {
+        return array(
+            'state' => 'unknown',
+            'label' => 'Not invited by us',
+            'canResend' => false,
+            // Said out loud: an absent button reads as a bug, and this names
+            // the thing they can actually do instead.
+            'why' => 'This account wasn\'t created by Digital Elements; they can use "Lost your password?" on the site\'s login page.',
+            'signal' => null,
+        );
+    }
+    if (!empty($seen['passwordSetAt'])) {
+        return array('state' => 'activated', 'label' => 'Active', 'canResend' => false,
+                     'why' => '', 'signal' => 'meta');
+    }
+    if (empty($seen['activationPending'])) {
+        return array('state' => 'activated', 'label' => 'Active', 'canResend' => false,
+                     'why' => '', 'signal' => 'key_cleared');
+    }
+    return array(
+        'state' => 'pending_setup',
+        'label' => 'Waiting for them to set a password',
+        'canResend' => true,
+        'why' => '',
+        'signal' => null,
     );
 }
 
@@ -527,6 +582,37 @@ add_action('wp_ajax_deheled_tm_assign', function () {
         wp_send_json_error(array('message' => $result->get_error_message()), 200);
     }
     wp_send_json_success(array('jobId' => $result['jobId'], 'replayed' => !empty($result['replayed'])));
+});
+
+/**
+ * Resend the set-password email to one colleague, for this site.
+ *
+ * Gated exactly as the rest of the panel is — deheled_site_users_require()
+ * checks the nonce and then all five conditions — and the work itself is done
+ * by the dashboard, which calls this site's own password-reset route. So the
+ * link is generated and mailed by WordPress, here, and nothing about it passes
+ * through this handler.
+ */
+add_action('wp_ajax_deheled_tm_resend', function () {
+    deheled_site_users_require();
+    $staff_id = isset($_POST['staffId']) ? sanitize_text_field(wp_unslash($_POST['staffId'])) : '';
+    if ($staff_id === '') wp_send_json_error(array('message' => 'Choose someone to resend to.'), 200);
+
+    $result = deheled_hub_resend_invite($staff_id);
+    if (is_wp_error($result)) {
+        wp_send_json_error(array('message' => $result->get_error_message()), 200);
+    }
+
+    // The roster carries invitation state, so it has to be re-read for the
+    // panel to show the new one.
+    deheled_hub_clear_roster_cache();
+    wp_send_json_success(array(
+        'delivered' => !empty($result['delivered']),
+        'state'     => isset($result['state']) ? $result['state'] : '',
+        'message'   => !empty($result['delivered'])
+            ? 'A new set-password email has been sent. Any earlier link has stopped working.'
+            : 'This website couldn\'t confirm the email was sent. They can use "Lost your password?" on the login page.',
+    ));
 });
 
 add_action('wp_ajax_deheled_tm_job', function () {

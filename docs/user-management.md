@@ -837,6 +837,129 @@ keep their role, content and access; we stop administering them. Folding account
 deletion into a team delete would be the most dangerous shortcut in this
 feature, so the return value states `deletesWordPressAccounts: false` explicitly.
 
+## Invitations — did the person we invited ever get in?
+
+Creating an account sends WordPress's own set-password email and then says
+nothing more. Whether it was delivered, whether anyone acted on it, and whether
+the account is sitting there unusable were all invisible: the way you found out
+was a colleague mentioning they never received anything.
+
+### What has always been true, and still is
+
+- The password is `wp_generate_password(32, true, true)`, generated on the site,
+  used once by `wp_insert_user()`, and **never stored, logged, returned or
+  displayed**. There is no branch anywhere that discloses it, including when
+  mail fails.
+- WordPress sends the link (`wp_new_user_notification($id, null, 'user')`).
+- **Nobody can sign in before setting a password**, by construction rather than
+  by a gate: a 32-character password that was never disclosed leaves nothing to
+  sign in with. There is deliberately **no login interceptor and no
+  forced-reset flag** — a stale flag locking out a colleague who *has* set a
+  password would be a worse failure than the one it guards, and it would guard
+  against nothing.
+- **A new link invalidates the old one** natively: `retrieve_password()`
+  overwrites `user_activation_key`. Nothing of ours sits beside that — no second
+  key, no expiry we maintain, nothing to fall out of step with the only copy
+  that matters.
+- **Nothing about a password or a reset key is persisted in this database.** A
+  test walks `information_schema` to assert it.
+
+### The five states
+
+Per **assignment**, not per person: an invitation is to one website, and the
+same colleague can be active on one site and still waiting on another.
+
+| State | Meaning |
+|---|---|
+| `invited` | created, and the site **verified** the email went out |
+| `delivery_failed` | created, but the site could not confirm delivery |
+| `pending_setup` | invited, and the set-password link is still unused |
+| `activated` | they set their own password |
+| `unknown` | linked or pre-existing — we never invited them |
+
+`delivery_failed` outranks `pending_setup`: telling someone to wait for a
+message that was never sent is the failure this whole feature exists to stop.
+
+### Two ways we learn about activation, and we say which
+
+1. **Observed.** `password_reset` / `after_password_reset` stamp
+   `_de_password_set_at` on the WordPress user. Signal: `meta`.
+2. **Inferred.** For accounts invited before that hook existed, a cleared
+   `user_activation_key` on an invited account means it was used. Signal:
+   `key_cleared`.
+
+Both display as **"Active"**, and both carry the signal into the API *and the
+tooltip*, because they are different strengths of evidence and whoever is
+debugging one specific account needs to know which they are looking at. An
+inference is never presented as an observation.
+
+A cleared key on an account we never invited proves nothing and is left as
+`unknown`.
+
+### Delivery is judged the same way on both paths
+
+Creation watched the mail hooks; the resend used to trust
+`retrieve_password()`'s return value — which reports `wp_mail()`'s verdict, and
+`wp_mail()` can return true while a plugin silently drops the message. Two paths
+answering "was it sent?" differently is precisely how someone ends up waiting
+for an email the dashboard says they received. Both now use
+`deheled_um_watch_mail()` / `deheled_um_mail_delivered()`.
+
+### Resend
+
+`POST /api/wpusers/invite/:staffUserId/:websiteId/resend` from the dashboard,
+and `POST /api/site/v1/invite/resend` from the plugin panel — the **same**
+function, so the two cannot drift apart. Both call the plugin's existing
+`/users/{id}/password-reset`.
+
+It requires `_de_created`, not merely `_de_managed`. An account we only *linked*
+is the website's own, and mailing a reset link into it is a route into an
+account that isn't ours — the rule the PR F review put there, kept. Those
+accounts read as `unknown`, and instead of an unexplained missing button the UI
+says:
+
+> This account wasn't created by Digital Elements; they can use "Lost your
+> password?" on the site's login page.
+
+Rate limited to **3 successful sends per person per site per hour**, counted
+from the audit rows rather than a column — a window over the log needs no reset
+and cleans itself up. **Failed** sends don't count, or three failures would lock
+someone out of the fix for the problem they are fixing.
+
+Every resend writes `wpusers.invite_resent` with the actor, site, target and
+outcome. A resend clears `password_set_at`: a fresh link means they have not
+used *this* one, whatever they did with the last.
+
+### Where it shows
+
+- **Users tab** — per person, a count of undelivered invitations and of people
+  still waiting; **Invitations…** opens the per-site breakdown with Resend.
+- **Sync status** — per site, `N invitations not delivered`, so a site with
+  broken mail is visible rather than discovered by the person who never got an
+  email.
+- **Team Members panel** — the same state per member on that site, with the
+  same Resend, gated exactly as the panel is.
+
+Status refreshes through reconciliation, on re-check and on the sweep. There is
+no new polling: the lookup that asks "are they still here" also answers "have
+they set a password".
+
+### The user shape was widened, deliberately
+
+`deheled_um_user_shape()` used to report `_de_managed` and nothing else — first
+and last name were removed to make that true. It now also reports
+`created_by_us`, `password_set_at` (a timestamp) and `activation_pending` (a
+**boolean** derived from `user_activation_key`).
+
+**The activation key itself never leaves the site.** It is the credential that
+would let anyone reset that account's password, and the dashboard has no use for
+it that could justify holding a copy.
+
+The shape is still a field-by-field allow-list, and a test now asserts the exact
+set of meta keys read — `_de_managed`, `_de_created`, `_de_password_set_at` —
+rather than only that unwanted values don't appear in the output. The next
+widening has to be as deliberate as this one.
+
 ## Reconciliation — the site is the authority
 
 An assignment row used to be written when we acted and never read again. Two
@@ -1009,6 +1132,9 @@ independence, and the team-delete disposition.
 authorities.
 `tests/usermgmt-site-api.test.mjs` covers the site API's identification,
 tenancy and response envelope.
+`tests/usermgmt-invites.test.mjs` covers the invitation state machine, the two
+activation signals, the resend rate limit, and that no column anywhere holds a
+password, a hash or a reset key.
 `tests/usermgmt-reconcile.test.mjs` covers every reconciliation transition, that
 a failed lookup is never read as absence, that a removed account is never
 recreated, the audit rows, idempotent re-runs, and that SQL and JS agree on what

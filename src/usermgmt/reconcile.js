@@ -26,6 +26,7 @@
 import { query } from "../db.js";
 import { callSite, WpError } from "./wpClient.js";
 import * as audit from "./audit.js";
+import { deriveInviteState, applyInviteState } from "./invites.js";
 
 /** What reconciliation found, per row. */
 export const DRIFT = Object.freeze({
@@ -46,6 +47,7 @@ async function assignmentsFor(websiteId) {
   const { rows } = await query(
     `select a.id, a.staff_user_id, a.website_id, a.wp_role, a.wp_user_id, a.wp_user_login,
             a.state, a.managed, a.drift, a.last_reconciled_at,
+            a.invite_state, a.invited_at, a.password_set_at, a.activation_signal,
             s.email, s.display_name, s.first_name, s.last_name
        from website_user_assignments a
        join staff_users s on s.id = a.staff_user_id
@@ -148,6 +150,31 @@ export function decide(assignment, observation) {
   return { ...now, noop: true };
 }
 
+/**
+ * Invitation status, refreshed from the same observation.
+ *
+ * Folded into reconciliation rather than polled: the question "has this person
+ * set a password yet" is answered by the same lookup that answers "are they
+ * still here", so asking it separately would double the traffic to every site
+ * to learn something we already had in hand.
+ *
+ * Only for accounts still present. Someone who was deleted has no invitation
+ * status worth updating, and their row already says removed_externally.
+ */
+async function applyInvite(assignment, observation) {
+  if (!observation || observation.present === false) return;
+  // An older plugin reports neither field. Leaving the state alone is the
+  // honest answer: we did not learn anything.
+  if (observation.activation_pending === undefined && !observation.password_set_at
+      && observation.created_by_us === undefined) return;
+
+  const derived = deriveInviteState(assignment, observation);
+  if (!derived) return;
+  if (derived.state === assignment.invite_state
+      && derived.signal === (assignment.activation_signal || null)) return;
+  await applyInviteState(assignment.id, derived);
+}
+
 /** Applies one decision. Hub rows and audit only — never a call to the site. */
 async function apply(site, assignment, decision, actor) {
   const sets = ["last_reconciled_at = now()"];
@@ -219,6 +246,11 @@ export async function reconcileFromObserved(site, observed, actor = {}) {
       roles: Array.isArray(o.roles) ? o.roles : [],
       managed: o.managed === true,
       wpUserId: Number(o.wpUserId) > 0 ? Number(o.wpUserId) : null,
+      // Invitation status, when the plugin is new enough to report it. Absent
+      // on an older plugin, which leaves the state alone rather than guessing.
+      created_by_us: typeof o.createdByUs === "boolean" ? o.createdByUs : undefined,
+      password_set_at: o.passwordSetAt || null,
+      activation_pending: typeof o.activationPending === "boolean" ? o.activationPending : undefined,
     });
   }
 
@@ -230,6 +262,7 @@ export async function reconcileFromObserved(site, observed, actor = {}) {
     const decision = decide(assignment, observation);
     if (!decision) { summary.skipped++; continue; }
     await apply(site, assignment, decision, { ...actor, via: actor.via || "plugin" });
+    await applyInvite(assignment, observation);
     tally(summary, decision);
   }
   return summary;
@@ -275,6 +308,10 @@ export async function reconcileSite(site, { actor = {}, credential = null } = {}
               roles: res.user?.roles || [],
               managed: res.user?.managed === true,
               wpUserId: Number(res.user?.id) || null,
+              created_by_us: typeof res.user?.created_by_us === "boolean" ? res.user.created_by_us : undefined,
+              password_set_at: res.user?.password_set_at || null,
+              activation_pending: typeof res.user?.activation_pending === "boolean"
+                ? res.user.activation_pending : undefined,
             }
           : { present: false };
       } catch (err) {
@@ -289,6 +326,7 @@ export async function reconcileSite(site, { actor = {}, credential = null } = {}
       const decision = decide(assignment, observation);
       if (!decision) { summary.skipped++; continue; }
       await apply(site, assignment, decision, { ...actor, via: actor.via || "recheck" });
+      await applyInvite(assignment, observation);
       tally(summary, decision);
     }
   };

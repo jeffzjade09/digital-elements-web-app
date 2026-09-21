@@ -25,6 +25,7 @@ import { getCapabilities, READINESS } from "./capabilities.js";
 import { callSite, WpError } from "./wpClient.js";
 import { resolveRequestedRole, predict, ACTION } from "./preflight.js";
 import * as audit from "./audit.js";
+import { recordInvite, INVITE } from "./invites.js";
 import { deleteOnSite, planDeletion } from "./contentOwnership.js";
 
 // Bounded so a bulk run can't open one connection per site at once. Four is
@@ -250,6 +251,20 @@ async function applyOne(jobId, op, actor) {
         result: "ok",
       });
 
+      // An account we just created was sent WordPress's set-password email, and
+      // the site told us whether it could confirm delivery. That is the only
+      // moment this is knowable, so it is recorded here rather than inferred
+      // later from something that no longer exists.
+      if (op.action === ACTION.CREATE && status !== "failed") {
+        const warnings = data.warnings || [];
+        await recordInvite({
+          staffUserId: op.staff.id,
+          websiteId: op.site.id,
+          delivered: !warnings.some((w) => w.code === "mail_failed"),
+          error: warnings.some((w) => w.code === "mail_failed") ? "mail_failed" : null,
+        });
+      }
+
       return { status, warnings: data.warnings || [], replayed: data.replayed === true };
     } catch (err) {
       lastError = err;
@@ -282,8 +297,10 @@ async function upsertAssignment(op, { state, wpUser, result, errorCode, error, a
   await query(
     `insert into website_user_assignments
        (staff_user_id, website_id, wp_role, wp_user_id, wp_user_login, state,
-        managed, last_result, last_error, last_error_code, last_synced_at, created_by)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, case when $6 = 'failed' then null else now() end, $11)
+        managed, last_result, last_error, last_error_code, last_synced_at, created_by,
+        invite_state)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, case when $6 = 'failed' then null else now() end, $11,
+             case when $12::text = 'create' then null else 'unknown' end)
      on conflict (staff_user_id, website_id) do update set
        wp_role = excluded.wp_role,
        wp_user_id = coalesce(excluded.wp_user_id, website_user_assignments.wp_user_id),
@@ -298,6 +315,10 @@ async function upsertAssignment(op, { state, wpUser, result, errorCode, error, a
        -- we have just set this person's role, or put them back, so "somebody
        -- changed this outside the dashboard" is answered. A failure leaves the
        -- drift standing, because nothing about the site changed.
+       -- An account we linked is the website's own: we never invited them, and
+       -- the reset route refuses it. Left alone once set, so a later create
+       -- doesn't overwrite a real invitation state with 'unknown'.
+       invite_state = coalesce(website_user_assignments.invite_state, excluded.invite_state),
        drift = case when excluded.state = 'failed' then website_user_assignments.drift else null end,
        drift_detail = case when excluded.state = 'failed' then website_user_assignments.drift_detail else null end,
        updated_at = now()`,
@@ -309,6 +330,10 @@ async function upsertAssignment(op, { state, wpUser, result, errorCode, error, a
       result ? JSON.stringify(result) : null,
       error || null, errorCode || null,
       actor?.actorUserId || null,
+      // A create gets its invitation state stamped by recordInvite() a moment
+      // later, once the site has said whether the email went. Anything else —
+      // a link, a role change — is an account we never invited.
+      op.action,
     ]
   );
 }

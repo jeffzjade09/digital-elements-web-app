@@ -24,6 +24,7 @@ import { runPreflight } from "../usermgmt/preflight.js";
 import { startAssignment, startRemoval, startDeletion, getJob, retryJob } from "../usermgmt/sync.js";
 import { getContentOwnership, reassignContent, planDeletion } from "../usermgmt/contentOwnership.js";
 import { reconcileAll, reconcileSite, driftSummary } from "../usermgmt/reconcile.js";
+import { resendInvite, getAssignment, inviteSummary, inviteLabel, noResendReason } from "../usermgmt/invites.js";
 import { getWebsites, getWebsiteSite, query } from "../db.js";
 
 export const router = express.Router();
@@ -665,7 +666,9 @@ router.get("/audit", asyncRoute(async (req, res) => {
 router.get("/assignments", asyncRoute(async (req, res) => {
   const { rows } = await query(
     `select a.staff_user_id, a.website_id, a.wp_role, a.state, a.managed,
-            a.last_error_code, a.last_synced_at, w.name as website_name
+            a.last_error_code, a.last_synced_at, w.name as website_name,
+            a.invite_state, a.invited_at, a.password_set_at, a.activation_signal,
+            a.invite_count, a.drift
        from website_user_assignments a
        left join websites w on w.id = a.website_id
       order by w.name asc nulls last`
@@ -681,6 +684,20 @@ router.get("/assignments", asyncRoute(async (req, res) => {
       managed: r.managed,
       errorCode: r.last_error_code,
       lastSyncedAt: r.last_synced_at,
+      drift: r.drift,
+      invite: {
+        state: r.invite_state,
+        label: inviteLabel(r.invite_state),
+        // Reported so an ACTIVATED inferred from a cleared activation key can
+        // be told apart from one our own hook observed. Same reason the API
+        // carries it: whoever is debugging one account needs to know which.
+        signal: r.activation_signal,
+        invitedAt: r.invited_at,
+        passwordSetAt: r.password_set_at,
+        count: r.invite_count,
+        canResend: r.invite_state === "pending_setup" || r.invite_state === "delivery_failed",
+        why: noResendReason(r.invite_state),
+      },
     })),
   });
 }));
@@ -694,6 +711,40 @@ router.get("/assignments", asyncRoute(async (req, res) => {
  * Assembled server-side so the UI makes one request instead of N, and so the
  * "needs updating" judgement is made in one place.
  */
+/**
+ * Send a fresh set-password link.
+ *
+ * For the case this feature exists for: the original email never arrived, and
+ * until now the only recourse was telling the person to use "Lost your
+ * password?" — which works, but requires explaining it, and leaves nobody any
+ * the wiser about how often it happens.
+ *
+ * Everything about the link itself belongs to WordPress. This asks the site to
+ * send one; it never sees, stores or returns a link or a password, and the
+ * previous link stops working because WordPress overwrites the activation key.
+ */
+router.post("/invite/:staffUserId/:websiteId/resend", requirePerm("manageWpUsers"), asyncRoute(async (req, res) => {
+  const assignment = await getAssignment(req.params.staffUserId, req.params.websiteId);
+  if (!assignment) return res.status(404).json({ ok: false, error: "No such assignment." });
+
+  const site = await getWebsiteSite(req.params.websiteId);
+  if (!site) return res.status(404).json({ ok: false, error: "No such website." });
+
+  try {
+    const result = await resendInvite({
+      site,
+      assignment,
+      actor: { actorUserId: req.user?.id, actorEmail: req.user?.email, ip: req.ip, via: "dashboard" },
+    });
+    res.json({ ok: true, ...result, email: assignment.email, site: site.name });
+  } catch (err) {
+    const status = err.code === "rate_limited" ? 429
+      : err.code === "not_managed" || err.code === "linked_account_protected" ? 403
+      : 502;
+    res.status(status).json({ ok: false, error: err.message, code: err.code || "failed" });
+  }
+}));
+
 router.get("/sync-status", asyncRoute(async (req, res) => {
   if (!credentials.isConfigured()) {
     return res.json({ ok: true, configured: false, sites: [], jobs: [], interrupted: 0 });
@@ -730,6 +781,9 @@ router.get("/sync-status", asyncRoute(async (req, res) => {
   );
 
   const drift = await driftSummary();
+  // Surfaced per site so mail that is broken on ONE site is visible here,
+  // rather than being discovered by the colleague who never got an email.
+  const invites = await inviteSummary();
 
   const withCounts = caps.map((c) => ({
     ...c,
@@ -737,6 +791,7 @@ router.get("/sync-status", asyncRoute(async (req, res) => {
     // Surfaced, not just corrected. A silent fix leaves someone wondering why
     // the list changed; a count says what happened and lets them go and look.
     drift: drift.get(c.websiteId) || { removedExternally: 0, roleChanged: 0, unmanaged: 0, lastReconciledAt: null },
+    invites: invites.get(c.websiteId) || { deliveryFailed: 0, pendingSetup: 0, invited: 0, activated: 0 },
     // Distinguishes "hasn't updated yet" from "can't be reached to find out",
     // which need completely different follow-up.
     needsPluginUpdate: c.readiness === READINESS.PLUGIN_UPDATE_REQUIRED,
