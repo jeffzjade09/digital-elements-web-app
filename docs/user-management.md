@@ -546,12 +546,22 @@ website id**, so a compromised site cannot name another site's id and be
 believed — it can only ever act as itself. That is structural, not a check that
 could be forgotten on one route.
 
-| Method | Route | Scope |
-|---|---|---|
-| GET | `/api/site/v1/roster` | `users:read` |
-| POST | `/api/site/v1/preflight` | `users:read` |
-| POST | `/api/site/v1/assign` | `plugin:assign` + `users:write` |
-| GET | `/api/site/v1/jobs/:id` | `users:read` (own jobs only) |
+| Method | Route | Scope | Actor required |
+|---|---|---|---|
+| POST | `/api/site/v1/roster` | `users:read` | yes |
+| POST | `/api/site/v1/preflight` | `users:read` | yes |
+| POST | `/api/site/v1/assign` | `plugin:assign` + `users:write` | yes |
+| GET | `/api/site/v1/jobs/:id` | `users:read` (own jobs only) | no — it reports on a job this site already started |
+
+`/roster` is a **POST** since 2.7.1: the acting person travels in the body,
+where the signature already covers the exact bytes, and the call now has a
+deliberate side effect. A query string would have to canonicalise identically in
+PHP and JS to produce a matching signature, and there was nothing to gain by
+taking that risk. `GET /roster` still answers — with "update this site's plugin
+to 2.7.1", so a site on 2.7.0 gets an instruction instead of a 404.
+
+**A request that omits the actor is refused, not treated as anonymous.** A rule
+that can be skipped by leaving a field out is not a rule.
 
 Requests are signed with **`DE1-SITE-HMAC-SHA256`** — a different version string
 from the hub→site direction. Both share a secret and a canonical string, so
@@ -601,25 +611,81 @@ addresses entirely, per-site rate limits, an independently revocable
 
 ### Who can see the screen
 
-Four conditions, **all** required, **all** checked in PHP on every entry point —
-the page callback and each of the four AJAX handlers — never by hiding markup:
+Five conditions, **all** required, none of them enforced by hiding markup:
 
-1. the license is present, verified and unexpired;
-2. the site is enrolled, granted `users:write`, and the dashboard grants it
-   `plugin:assign`;
-3. the logged-in user holds **both** `edit_users` and `promote_users` here;
-4. the logged-in user is `_de_managed` **and** has an `@digitalelementsgroup.com`
-   address.
+| | Checked by | |
+|---|---|---|
+| 1 | the plugin | the license is present, verified and unexpired |
+| 2 | the plugin | the site is enrolled, granted `users:write`, and the dashboard grants it `plugin:assign` |
+| 3 | the plugin | the logged-in user holds **both** `edit_users` and `promote_users` here |
+| 4 | the plugin | their email is on **exactly** `@digitalelementsgroup.com` |
+| 5 | **the hub** | that address is an **active** staff record whose team is **Web Development** or **Admin** |
 
-Condition 4 is the one that matters. A client's own Administrator holds every
-capability on their own site, so 3 alone would admit them. Being a
-Digital-Elements-managed account is what separates "our staff working here" from
-"the site's owner", and it is checked against user meta the hub writes, not
-against anything the browser sends.
+1–4 run in PHP on every entry point — the page callback *and* each of the four
+AJAX handlers. 5 runs on the hub, on `/roster`, `/preflight` **and** `/assign`,
+because a check the plugin makes is a check a compromised plugin can skip.
 
 The submenu is registered for `read` and the **callback** enforces the gate,
 rather than the menu being hidden and that trusted. Hiding markup is
 presentation; the callback is the control.
+
+#### What condition 4 is, and what it is not
+
+**It is a mistake-guard and a visibility control, not a security boundary.** A
+WordPress account's email address is set by whoever administers that WordPress
+site, so a site that has been compromised — or an administrator acting in bad
+faith — can create an account claiming any agency address and pass it. Saying
+otherwise would be a lie about what the check does.
+
+What actually bounds the damage is on the hub, and is unchanged: assignment only
+to existing roster members, the agency-domain rule, the site's own `users:admin`
+scope, the last-administrator guard — plus condition 5, which caps what a
+spoofed actor could achieve at what a Web Development or Admin colleague could
+already do **on that one site**. A site can still only ever act as itself.
+
+#### Why it is no longer `_de_managed`
+
+Until 2.7.1, condition 4 required the `_de_managed` flag. That flag only exists
+on an account the dashboard created or linked — so every colleague whose account
+predates this tool was refused by name while being on the roster and
+administering the site. At roughly forty sites, linking each person on each site
+by hand was never realistic. The hub decides instead, and adopts the account on
+the way through.
+
+#### The allowed teams
+
+`web-development` and `admin`, by **slug**, defined once in
+`src/usermgmt/siteActor.js` as `PANEL_TEAM_SLUGS`. Slugs are derived when a team
+is created and left alone when it is renamed, so renaming "Web Development"
+cannot quietly close the gate and a new team called "Admin" cannot quietly open
+it. Everything that decides who may use the panel reads that one constant.
+
+### Adopting a pre-existing account
+
+When someone passes all five conditions and their WordPress account is not yet
+managed, the hub links it through the **existing** `de/v2 /users/:id/link`
+route — the same one the dashboard uses, with the same guards. Nothing about
+linking is reimplemented, and the dashboard's manual link flow is untouched.
+
+It happens on `/roster`, which is the panel's first call, and only when the
+plugin reports the account as unmanaged. The hub also checks its own assignment
+row, so a plugin that reports wrongly, or a request replayed later, cannot
+produce a second link or a second audit row.
+
+Every attempt writes **`wpusers.auto_linked_via_plugin`** to the Activity Log
+with the website, the WordPress user id, the email, the team, whether it
+succeeded, and — when it didn't — why.
+
+**The link does not bypass `users:admin`.** That scope is the site's own kill
+switch over its administrator accounts, and a colleague being the one asking
+does not make it ours to switch off. On a site that hasn't granted it, linking
+an administrator-capable account is refused with `users_admin_not_granted`, and
+**the panel opens anyway**: access is the five conditions, not the link. The
+audit row is what stops an account that can use the panel while showing as
+unmanaged from looking like a bug.
+
+If the address resolves to nobody on the roster, or to somebody in another team,
+the request is refused outright — the plugin never creates roster entries.
 
 ### Why the screen is unavailable, in nine distinct ways
 
@@ -634,6 +700,9 @@ presentation; the callback is the control.
 | `hub_unreachable` | the dashboard didn't answer |
 | `roster_empty` | there is nobody to add yet |
 | `no_permission` | this account may not use the screen |
+| `not_on_roster` | the dashboard has never heard of this address |
+| `team_not_allowed` | on the roster, in a team that may not use this |
+| `plugin_outdated` | the hub wants 2.7.1 or later on this site |
 
 Each has its own title and its own sentence. Collapsing them into "unavailable"
 would leave whoever hits it with nothing to act on, and these need completely
@@ -823,6 +892,10 @@ independence, and the team-delete disposition.
 authorities.
 `tests/usermgmt-site-api.test.mjs` covers the site API's identification,
 tenancy and response envelope.
+`tests/usermgmt-actor.test.mjs` covers who may drive the panel: the exact-domain
+matcher, the allowed-team constant, roster resolution, and that every route
+refuses a disallowed team, an omitted actor and an invented colleague — plus
+auto-link idempotency.
 `tests/usermgmt-site-panel.test.php` covers the Team Members panel: every gate
 state, a client's own Administrator refused, the agency-domain rule, the nonce
 on all four AJAX handlers, the capability-subset rule, the roster cache key, and
