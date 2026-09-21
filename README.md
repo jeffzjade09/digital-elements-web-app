@@ -286,6 +286,10 @@ tests/usermgmt-content.test.php     ownership counting incl. custom post types,
                                     refusal, and the stale-UI orphan case
 tests/usermgmt-deletion.test.mjs    the ownership summary, per-website
                                     independence, team-delete disposition
+tests/usermgmt-scopes.test.mjs      that a site's granted scopes are persisted
+                                    on every probe, in both directions. The
+                                    round-trip half needs DATABASE_URL and
+                                    skips without it
 ```
 
 ### Live check against a real WordPress install

@@ -141,6 +141,12 @@ While in DE Monitoring, that site's administrator chooses whether we may:
 
 **Both are off by default.** They are switched on locally, per site, and this
 dashboard cannot turn them on — it is the client's kill switch, not ours.
+
+The dashboard mirrors whatever the site reports on every successful probe, in
+both directions: granting a scope there starts working here after a **Re-check**,
+and revoking it there stops working here on the next probe. A site we can't
+reach is left as it was — an unreachable site has told us nothing about what it
+grants, so a slow site never silently revokes a client's permission.
 Reading users, creating and updating them, and reassigning content come with
 enrollment.
 
