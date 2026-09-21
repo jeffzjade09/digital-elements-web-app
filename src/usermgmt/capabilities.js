@@ -19,6 +19,14 @@ export const REQUIRED_API_VERSION = 1;
 // minutes is short enough that a just-updated site shows up promptly.
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Test seam: lets a test stand in for a site, so the probe -> store ->
+ * cached-read round trip can be exercised exactly rather than approximately.
+ * Never called outside tests.
+ */
+let probeFn = probeCapabilities;
+export function __setProbeForTest(fn) { probeFn = fn || probeCapabilities; }
+
 export const READINESS = {
   READY: "ready",
   NEEDS_ENROLLMENT: "needs_enrollment",
@@ -33,14 +41,49 @@ function cacheIsFresh(row, maxAgeMs) {
   return Date.now() - new Date(row.um_caps_checked_at).getTime() < maxAgeMs;
 }
 
-async function writeCache(websiteId, { pluginVersion, apiVersion, caps, error }) {
-  await query(
+/**
+ * Which scopes to persist from a probe response.
+ *
+ * Only an actual array from the site. Three cases have to stay distinct:
+ *
+ *   an array  — the site's live answer, including an EMPTY one. An empty array
+ *               means "I grant nothing", which is a real state and must narrow
+ *               what we think we have.
+ *   undefined — an older plugin that doesn't report scopes. Keep what we had;
+ *               inventing scopes it never claimed would be worse than stale.
+ *   a failure — never reaches here. A probe that failed tells us nothing about
+ *               what the site grants, and must not widen or narrow anything.
+ */
+export function scopesToPersist(data) {
+  return Array.isArray(data?.scopes) ? data.scopes : null;
+}
+
+/**
+ * Writes what a probe learned, and returns the row as it now stands.
+ *
+ * Returning the stored row rather than letting the caller assemble its own is
+ * deliberate. The bug this replaces was exactly that divergence: the freshly
+ * probed response was patched in memory with the site's real scopes while the
+ * database kept the enrollment-time defaults, so the answer was right once and
+ * wrong on every cached read afterwards. Now there is one value, and it is the
+ * stored one.
+ *
+ * `scopes` is applied only when the caller has a real array; null leaves the
+ * column untouched, so a failed probe can never change what we believe a site
+ * has granted.
+ */
+async function writeCache(websiteId, { pluginVersion, apiVersion, caps, error, scopes = null }) {
+  const { rows } = await query(
     `update websites set
        um_plugin_version = $2, um_api_version = $3, um_caps = $4,
-       um_caps_error = $5, um_caps_checked_at = now()
-     where id = $1`,
-    [websiteId, pluginVersion || null, apiVersion || null, caps || [], error || null]
+       um_caps_error = $5, um_caps_checked_at = now(),
+       um_scopes = coalesce($6::text[], um_scopes)
+     where id = $1
+     returning um_key_id, um_scopes, um_enrolled_at, um_plugin_version,
+               um_api_version, um_caps, um_caps_error, um_caps_checked_at`,
+    [websiteId, pluginVersion || null, apiVersion || null, caps || [], error || null, scopes]
   );
+  return rows[0] || null;
 }
 
 /**
@@ -68,20 +111,25 @@ export async function getCapabilities(site, { force = false, maxAgeMs = CACHE_TT
   }
 
   try {
-    const data = await probeCapabilities(site);
+    const data = await probeFn(site);
     const caps = Array.isArray(data.capabilities) ? data.capabilities : [];
     const apiVersion = Number(data.api_version) || 0;
-    await writeCache(site.id, { pluginVersion: data.plugin_version, apiVersion, caps, error: null });
-    return shape(site, {
-      ...row,
-      um_plugin_version: data.plugin_version,
-      um_api_version: apiVersion,
-      um_caps: caps,
-      um_caps_error: null,
-      um_caps_checked_at: new Date().toISOString(),
-      // The site is the authority on what it has actually enabled.
-      um_scopes: Array.isArray(data.scopes) ? data.scopes : row.um_scopes,
-    }, {
+
+    // The site is the authority on what it has enabled, in BOTH directions: a
+    // scope granted there has to start working here, and one revoked there has
+    // to stop working here. Persisting it is what makes the client's kill
+    // switch real rather than advisory.
+    const stored = await writeCache(site.id, {
+      pluginVersion: data.plugin_version,
+      apiVersion,
+      caps,
+      error: null,
+      scopes: scopesToPersist(data),
+    });
+
+    // Shaped from the STORED row, so what this call returns and what the next
+    // cached read returns cannot disagree.
+    return shape(site, stored || row, {
       siteEnrolled: data.enrolled === true,
       multisite: data.multisite === true,
       wpVersion: data.wp_version,
@@ -94,6 +142,10 @@ export async function getCapabilities(site, { force = false, maxAgeMs = CACHE_TT
       apiVersion: err.code === "plugin_update_required" ? 0 : null,
       caps: [],
       error: err.message,
+      // Explicitly unchanged: a site we couldn't reach has told us nothing
+      // about what it grants. Clearing the scopes here would silently revoke
+      // permissions a client did give us, every time their site was slow.
+      scopes: null,
     });
     return shape(site, { ...row, um_caps: [], um_api_version: err.code === "plugin_update_required" ? 0 : null, um_caps_error: err.message, um_caps_checked_at: new Date().toISOString() },
       { readiness: err.code === "plugin_update_required" ? READINESS.PLUGIN_UPDATE_REQUIRED : READINESS.UNREACHABLE, error: err.message });
