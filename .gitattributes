@@ -1,0 +1,24 @@
+# Line endings are normalised to LF in the working tree, not just in the object
+# store.
+#
+# Without this, core.autocrlf=true checks these files out with CRLF on Windows
+# while git stores LF — so `npm run build:plugin` hashed different bytes
+# depending on who ran it. Three builds of identical source produced three
+# different archives, which made the committed .sha256 unverifiable and meant a
+# rebuild could offer every client site an "update" containing byte-identical
+# code. build-plugin.js documents itself as byte-reproducible; this is what
+# makes that true.
+#
+# It also removes a whole class of test bug: an assertion matching on "\n"
+# passed for whoever wrote the file and failed on a fresh clone.
+* text=auto eol=lf
+
+# Binary, so git never touches the bytes.
+*.zip  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary

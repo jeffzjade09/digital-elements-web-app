@@ -721,8 +721,15 @@ async function wpuRenderWebsites(force) {
         ${w.licenseMismatch ? ` <span class="wpu-chip bad" title="This site uses ${esc(w.licenseSite)}'s license key">Wrong license</span>` : ""}
       </td>
       <td data-label="Plugin">${w.pluginVersion ? `<span class="wpu-chip role">${esc(w.pluginVersion)}</span>` : '<span class="wpu-chip none">—</span>'}</td>
-      <td data-label="Permissions">${w.enrolled && w.scopes.length
+      <td data-label="Site allows">${w.enrolled && w.scopes.length
         ? w.scopes.map((sc) => `<span class="wpu-chip role">${esc(sc)}</span>`).join(" ")
+        : '<span class="wpu-chip none">—</span>'}</td>
+      <td data-label="We allow">${w.enrolled
+        ? `<label class="wpu-check" style="gap:6px">
+             <input type="checkbox" ${(w.hubScopes || []).includes("plugin:assign") ? "checked" : ""}
+                    onchange="wpuSetPluginAssign('${escJs(w.websiteId)}', this.checked)" />
+             <span>Plugin can add staff</span>
+           </label>`
         : '<span class="wpu-chip none">—</span>'}</td>
       <td data-label="Checked" class="wpu-audit-when">${esc(w.checkedAt ? wpuWhen(w.checkedAt) : "—")}</td>
       <td class="wpu-actions">
@@ -749,13 +756,16 @@ async function wpuRenderWebsites(force) {
     }).join("")}</div>` : ""}
     <div class="wpu-card">
       ${data.websites.length ? `<table class="wpu-table">
-        <thead><tr><th>Website</th><th>Status</th><th>Plugin</th><th>Permissions</th><th>Checked</th><th></th></tr></thead>
+        <thead><tr><th>Website</th><th>Status</th><th>Plugin</th><th>Site allows</th><th>We allow</th><th>Checked</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table>`
       : '<div class="wpu-empty"><h4>No websites yet</h4><div class="wpu-note">Add websites from the Websites section first.</div></div>'}
     </div>
     <div class="wpu-note" style="margin-top:12px">
-      Deleting users and granting Administrator stay off unless each site’s own administrator
-      turns them on in its DE Monitoring panel — a local switch this dashboard can’t flip.
+      <strong>Site allows</strong> is what each website’s own administrator has permitted —
+      deleting users and granting Administrator stay off unless they turn them on, and this
+      dashboard can’t flip that switch.
+      <strong>We allow</strong> is ours: whether staff working in that site’s WP Admin can add
+      colleagues to it from the plugin. Turning it off here stays off.
     </div>`;
 }
 
@@ -837,6 +847,29 @@ function wpuShowCode(res, rotated) {
       </div>`,
     actions: '<button class="btn-primary" onclick="wpuCloseModal(); wpuRenderWebsites(true)">Done</button>',
   });
+}
+
+/**
+ * Turns plugin-initiated assignment on or off for one website.
+ *
+ * This is the dashboard's own grant, not the site's. A site's plugin can never
+ * change it, and no capability probe can put it back once it is off — which is
+ * the whole reason the two kinds of permission are stored separately.
+ */
+async function wpuSetPluginAssign(websiteId, enabled) {
+  try {
+    await wpuApi(`/websites/${websiteId}/hub-scopes`, {
+      method: "PUT", body: { pluginAssign: !!enabled },
+    });
+    wpuRenderWebsites(false);
+  } catch (err) {
+    wpuOpenModal({
+      eyebrow: "Websites",
+      title: "Couldn't change that permission",
+      body: `<div class="wpu-danger">${esc(err.message)}</div>`,
+      actions: '<button class="btn-primary" onclick="wpuCloseModal(); wpuRenderWebsites(false)">Close</button>',
+    });
+  }
 }
 
 function wpuCopyCode(code, btn) {

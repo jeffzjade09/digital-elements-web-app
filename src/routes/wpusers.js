@@ -299,6 +299,34 @@ router.post("/websites/:id/rotate-credential", asyncRoute(async (req, res) => {
   } catch (err) { return fail(res, err); }
 }));
 
+/**
+ * Grants or revokes what the DASHBOARD permits a site to do — currently whether
+ * its plugin may assign staff to itself.
+ *
+ * Separate from the permissions a site grants us, which are set in that site's
+ * own DE Monitoring panel and reported on every probe. This one is ours, and
+ * turning it off here stays off: no probe can put it back.
+ */
+router.put("/websites/:id/hub-scopes", asyncRoute(async (req, res) => {
+  const site = await getWebsiteSite(req.params.id);
+  if (!site) return res.status(404).json({ ok: false, error: "Unknown website." });
+  const b = req.body || {};
+  const scopes = [];
+  if (b.pluginAssign === true) scopes.push("plugin:assign");
+
+  try {
+    const before = await getCapabilities(site);
+    const credential = await credentials.setHubScopes(site.id, scopes);
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "site.hub_scopes_changed", entityType: "website", entityId: site.id, websiteId: site.id,
+      before: { hubScopes: before.hubScopes || [] },
+      after: { hubScopes: credential?.hubScopes || [] },
+    });
+    res.json({ ok: true, credential });
+  } catch (err) { return fail(res, err); }
+}));
+
 // Revokes without reissuing. Monitoring is unaffected; only user management
 // stops working for that site.
 router.post("/websites/:id/revoke-credential", asyncRoute(async (req, res) => {

@@ -286,6 +286,11 @@ tests/usermgmt-content.test.php     ownership counting incl. custom post types,
                                     refusal, and the stale-UI orphan case
 tests/usermgmt-deletion.test.mjs    the ownership summary, per-website
                                     independence, team-delete disposition
+tests/usermgmt-site-api.test.mjs    the site-initiated API: the two signing
+                                    directions, hub- vs site-controlled scopes,
+                                    the roster allow-list, replay, and job
+                                    idempotency. Round-trip half needs
+                                    DATABASE_URL and skips without it
 tests/usermgmt-scopes.test.mjs      that a site's granted scopes are persisted
                                     on every probe, in both directions. The
                                     round-trip half needs DATABASE_URL and
