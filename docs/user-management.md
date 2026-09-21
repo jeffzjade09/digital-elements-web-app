@@ -509,6 +509,79 @@ content and its access** — we simply stop managing it. Deleting an account nee
 the content-ownership checks from the next phase; offering deletion without them
 is how content gets orphaned, so the route refuses `deleteAccounts` outright.
 
+## Adding staff from inside a client's WP Admin
+
+A member of staff already working in a client's WP Admin can add colleagues to
+**that** site without switching to the dashboard. The plugin UI for this arrives
+with 2.7.0; the hub side is described here.
+
+### The plugin never creates anyone
+
+It sends a signed request to the hub, and the hub runs the **same** `de/v2` path
+the dashboard uses — same guards, same idempotency, same audit rows, same
+set-password email. The plugin renders the result. That is why there is no
+second implementation to drift out of step.
+
+### How a site is identified
+
+By the credential that signed the request. **No route in the site API takes a
+website id**, so a compromised site cannot name another site's id and be
+believed — it can only ever act as itself. That is structural, not a check that
+could be forgotten on one route.
+
+| Method | Route | Scope |
+|---|---|---|
+| GET | `/api/site/v1/roster` | `users:read` |
+| POST | `/api/site/v1/preflight` | `users:read` |
+| POST | `/api/site/v1/assign` | `plugin:assign` + `users:write` |
+| GET | `/api/site/v1/jobs/:id` | `users:read` (own jobs only) |
+
+Requests are signed with **`DE1-SITE-HMAC-SHA256`** — a different version string
+from the hub→site direction. Both share a secret and a canonical string, so
+without this a signature captured from one direction could in principle be
+presented in the other; the distinct version makes that impossible rather than
+merely unlikely.
+
+### Two authorities for permissions
+
+| | Set by | Stored in | Reported by the plugin? |
+|---|---|---|---|
+| `users:read`, `users:write`, `users:admin`, `users:delete`, `content:reassign` | **the website's own administrator** | `um_scopes` | Yes — every probe overwrites it |
+| `plugin:assign` | **the dashboard** | `um_hub_scopes` | No |
+
+They are separate columns on purpose. A capability probe writes `um_scopes`
+wholesale; if `plugin:assign` lived there, the next probe would wipe it and a
+revoke made in the dashboard would silently come back minutes later. Keeping
+them apart means the persist path *cannot* touch the hub's column.
+
+`plugin:assign` is granted at enrollment and revocable per site from the
+Websites tab ("We allow"). Sites enrolled before 2.7.0 are backfilled by
+migration 007, so nothing needs re-enrolling.
+
+### What a compromised site could do
+
+Read the agency roster (names, emails, teams, default roles of active staff),
+run preflight for itself, and assign **existing** roster members to **itself**.
+
+It cannot touch another site, create or edit staff or teams, delete anything, or
+escalate beyond that site's own `users:admin` grant. **The real residual risk is
+roster disclosure** — staff names and emails become readable by any connected
+site. Mitigated by exposing only what the form needs, excluding external
+addresses entirely, per-site rate limits, an independently revocable
+`plugin:assign`, and auditing every read.
+
+### One rule that is a guard, not a boundary
+
+The plugin will refuse to let someone assign a role above their own level on
+that site, defined as capability-subset. **This can only be enforced in the
+plugin**, because only the plugin knows the acting WordPress user's
+capabilities — the hub sees a site credential, not a WP session.
+
+So it is a guard against honest mistakes, **not a security boundary**: a
+compromised site could bypass it, but a compromised site can already call
+`wp_create_user()` on itself. The boundaries that *are* real are the hub's —
+role whitelist, `users:admin` scope, agency-domain rule, last-administrator.
+
 ## Deleting an account
 
 ### Why it is called "Delete from this website"

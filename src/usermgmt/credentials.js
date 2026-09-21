@@ -20,6 +20,28 @@ import { query } from "../db.js";
 export const DEFAULT_SCOPES = ["users:read", "users:write", "content:reassign"];
 export const ALL_SCOPES = [...DEFAULT_SCOPES, "users:delete", "users:admin"];
 
+/**
+ * Scopes the HUB grants to a site, as opposed to the ones a site grants us.
+ *
+ * The distinction is not cosmetic. Everything in ALL_SCOPES is reported by the
+ * plugin on every capability probe and written wholesale to websites.um_scopes
+ * — that is what makes the client's kill switch work in both directions. A
+ * hub-controlled scope is one the plugin knows nothing about and therefore
+ * never reports, so storing it in the same column would mean the next probe
+ * silently erased it, and a revoke made in the dashboard would come back a few
+ * minutes later.
+ *
+ * They live in websites.um_hub_scopes, which no probe ever writes.
+ */
+export const HUB_CONTROLLED_SCOPES = ["plugin:assign"];
+
+/** Granted at enrollment, so connecting a site is still one visit. */
+export const DEFAULT_HUB_SCOPES = ["plugin:assign"];
+
+export function isHubControlledScope(scope) {
+  return HUB_CONTROLLED_SCOPES.includes(scope);
+}
+
 const ENROLLMENT_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const CODE_GROUPS = 3;
 // Crockford-style alphabet: no I, L, O, U, so a code read aloud or retyped from
@@ -90,39 +112,97 @@ export function credentialView(row) {
   return {
     enrolled: !!row.um_key_id,
     keyId: row.um_key_id || null,
+    // Reported separately so it is always obvious which of the two decided a
+    // given permission — and so a reader can see that a probe touches one and
+    // not the other.
     scopes: row.um_scopes || [],
+    hubScopes: row.um_hub_scopes || [],
     enrolledAt: row.um_enrolled_at || null,
     rotatedAt: row.um_rotated_at || null,
   };
 }
 
+/** Everything a site is allowed to do, from either authority. */
+export function effectiveScopes(row) {
+  return [...new Set([...(row?.um_scopes || []), ...(row?.um_hub_scopes || [])])];
+}
+
 // Plaintext secret for signing. Internal use only — never goes near a response.
 export async function getSigningCredential(websiteId) {
   const { rows } = await query(
-    "select um_key_id, um_secret_enc, um_scopes from websites where id = $1",
+    "select um_key_id, um_secret_enc, um_scopes, um_hub_scopes from websites where id = $1",
     [websiteId]
   );
   const row = rows[0];
   if (!row || !row.um_key_id || !row.um_secret_enc) return null;
-  return { keyId: row.um_key_id, secret: decryptSecret(row.um_secret_enc), scopes: row.um_scopes || [] };
+  return {
+    keyId: row.um_key_id,
+    secret: decryptSecret(row.um_secret_enc),
+    scopes: row.um_scopes || [],
+    hubScopes: row.um_hub_scopes || [],
+  };
+}
+
+/**
+ * Resolves a site FROM its key id — the inverse lookup, used when a site calls
+ * us rather than the other way round.
+ *
+ * This is how an inbound request's identity is established, and it is the
+ * reason the site API carries no website_id parameter anywhere: identity comes
+ * from the credential that signed the request, so a site cannot name another
+ * site's id and be believed. websites_um_key_id_idx makes it a unique lookup.
+ */
+export async function getSiteByKeyId(keyId) {
+  if (!keyId || typeof keyId !== "string") return null;
+  const { rows } = await query(
+    `select id, name, url, um_key_id, um_secret_enc, um_scopes, um_hub_scopes,
+            license_key, license_expires_at, helper_enabled
+       from websites where um_key_id = $1`,
+    [keyId]
+  );
+  const row = rows[0];
+  if (!row || !row.um_secret_enc) return null;
+  return row;
 }
 
 // Issues a fresh credential for a site, replacing any existing one. The old
 // secret stops working the moment the site stores the new one, so rotation is
 // always paired with re-enrollment.
-export async function storeCredential(websiteId, { keyId, secret, scopes }, { rotation = false } = {}) {
+export async function storeCredential(websiteId, { keyId, secret, scopes, hubScopes }, { rotation = false } = {}) {
   assertConfigured();
   const { rows } = await query(
     `update websites set
        um_key_id = $2,
        um_secret_enc = $3,
        um_scopes = $4,
+       um_hub_scopes = $6,
        um_enrolled_at = coalesce(um_enrolled_at, now()),
        um_rotated_at = case when $5 then now() else um_rotated_at end,
        updated_at = now()
      where id = $1
-     returning um_key_id, um_scopes, um_enrolled_at, um_rotated_at`,
-    [websiteId, keyId, encryptSecret(secret), scopes || DEFAULT_SCOPES, rotation]
+     returning um_key_id, um_scopes, um_hub_scopes, um_enrolled_at, um_rotated_at`,
+    [websiteId, keyId, encryptSecret(secret), scopes || DEFAULT_SCOPES, rotation, hubScopes || DEFAULT_HUB_SCOPES]
+  );
+  return rows[0] ? credentialView(rows[0]) : null;
+}
+
+/**
+ * Grants or revokes a hub-controlled scope for one site.
+ *
+ * Only these scopes can be set from here. A site-controlled scope handed to
+ * this function would be overwritten by the next probe anyway, so refusing is
+ * clearer than pretending it worked.
+ */
+export async function setHubScopes(websiteId, scopes) {
+  const requested = (Array.isArray(scopes) ? scopes : []).map(String);
+  const unknown = requested.filter((sc) => !isHubControlledScope(sc));
+  if (unknown.length) {
+    throw new Error(`Not permissions the dashboard controls: ${unknown.join(", ")}. Those are set on the website itself.`);
+  }
+  const { rows } = await query(
+    `update websites set um_hub_scopes = $2, updated_at = now() where id = $1
+     returning um_key_id, um_scopes, um_hub_scopes, um_enrolled_at, um_rotated_at`,
+    [websiteId, [...new Set(requested)]]
   );
   return rows[0] ? credentialView(rows[0]) : null;
 }
@@ -132,6 +212,7 @@ export async function storeCredential(websiteId, { keyId, secret, scopes }, { ro
 export async function revokeCredential(websiteId) {
   const { rows } = await query(
     `update websites set um_key_id = null, um_secret_enc = null, um_scopes = '{}',
+            um_hub_scopes = '{}',
             um_enrolled_at = null, um_rotated_at = null, updated_at = now()
       where id = $1 returning id`,
     [websiteId]
@@ -231,7 +312,13 @@ export async function redeemEnrollmentCode({ code, licenseKey, ip }) {
   if (!claim.rows.length) return { ok: false, reason: "already_redeemed", ...site };
 
   const credential = generateCredential();
-  await storeCredential(row.website_id, { ...credential, scopes: DEFAULT_SCOPES });
+  await storeCredential(row.website_id, {
+    ...credential,
+    scopes: DEFAULT_SCOPES,
+    // Granted at enrollment so connecting a site stays one visit; revocable
+    // per site from the dashboard afterwards.
+    hubScopes: DEFAULT_HUB_SCOPES,
+  });
   return {
     ok: true,
     websiteId: row.website_id,

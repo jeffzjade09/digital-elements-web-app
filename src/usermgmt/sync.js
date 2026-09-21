@@ -119,13 +119,33 @@ export async function planAssignment({ staffList, sites, roleOverrides = {}, con
 
 /* ------------------------------------------------------------ execution --- */
 
-export async function createJob({ kind, params, actor }) {
+export async function createJob({ kind, params, actor, idempotencyKey = null, originWebsiteId = null }) {
   const { rows } = await query(
-    `insert into user_sync_jobs (kind, initiated_by, initiated_email, params, status, started_at)
-     values ($1,$2,$3,$4,'running', now()) returning id, created_at`,
-    [kind, actor?.actorUserId || null, actor?.actorEmail || null, JSON.stringify(params || {})]
+    `insert into user_sync_jobs
+       (kind, initiated_by, initiated_email, params, status, started_at, idempotency_key, origin_website_id)
+     values ($1,$2,$3,$4,'running', now(), $5, $6) returning id, created_at`,
+    [kind, actor?.actorUserId || null, actor?.actorEmail || null, JSON.stringify(params || {}),
+     idempotencyKey, originWebsiteId]
   );
   return rows[0];
+}
+
+/**
+ * A job already started under this key, if there is one.
+ *
+ * A plugin-initiated assignment is one HTTP request that kicks off background
+ * work. A dropped connection or an impatient second click must return the SAME
+ * job, not start another that assigns everybody twice — and unlike the
+ * per-operation keys, which make each site call replay, this is what stops the
+ * job existing twice in the first place.
+ */
+export async function findJobByIdempotencyKey(key) {
+  if (!key) return null;
+  const { rows } = await query(
+    "select id from user_sync_jobs where idempotency_key = $1",
+    [key]
+  );
+  return rows[0] || null;
 }
 
 async function recordOperation(jobId, op, action) {
@@ -344,7 +364,19 @@ export async function finalizeJob(jobId) {
  * roster: this is the call that actually creates an account on a client site,
  * and it must not be possible to reach it by a path that skipped the check.
  */
-export async function startAssignment({ staffUserIds = [], teamId = null, websiteIds = [], roleOverrides = {}, confirmations = {}, overrideDomain = false }, actor) {
+export async function startAssignment({ staffUserIds = [], teamId = null, websiteIds = [], roleOverrides = {}, confirmations = {}, overrideDomain = false, idempotencyKey = null, originWebsiteId = null }, actor) {
+  // Checked before any work: a replayed request must not re-plan, re-audit or
+  // re-run anything, it must simply be handed the job it already started.
+  if (idempotencyKey) {
+    const existing = await findJobByIdempotencyKey(idempotencyKey);
+    if (existing) {
+      const { rows } = await query(
+        "select count(*)::int n from user_sync_operations where job_id = $1", [existing.id]
+      );
+      return { jobId: existing.id, operations: rows[0]?.n || 0, replayed: true };
+    }
+  }
+
   const staffList = await loadStaff(staffUserIds, teamId);
   if (!staffList.length) throw new Error("Select at least one person.");
 
@@ -372,11 +404,30 @@ export async function startAssignment({ staffUserIds = [], teamId = null, websit
     }
   }
 
-  const job = await createJob({
-    kind: "assign",
-    params: { staffUserIds: staffList.map((s) => s.id), teamId, websiteIds, roleOverrides, confirmations },
-    actor,
-  });
+  let job;
+  try {
+    job = await createJob({
+      kind: "assign",
+      params: { staffUserIds: staffList.map((s) => s.id), teamId, websiteIds, roleOverrides, confirmations },
+      actor,
+      idempotencyKey,
+      originWebsiteId,
+    });
+  } catch (err) {
+    // Two identical requests can race past the check above. The unique index is
+    // the real guarantee; losing the race means the other one made the job, so
+    // return that rather than failing a request that is about to succeed.
+    if (err.code === "23505" && idempotencyKey) {
+      const existing = await findJobByIdempotencyKey(idempotencyKey);
+      if (existing) {
+        const { rows } = await query(
+          "select count(*)::int n from user_sync_operations where job_id = $1", [existing.id]
+        );
+        return { jobId: existing.id, operations: rows[0]?.n || 0, replayed: true };
+      }
+    }
+    throw err;
+  }
 
   const ops = await planAssignment({ staffList, sites, roleOverrides, confirmations });
   // Rows up front so the progress view has something to show immediately.
@@ -391,7 +442,7 @@ export async function startAssignment({ staffUserIds = [], teamId = null, websit
       await query("update user_sync_jobs set status='failed', finished_at=now() where id=$1", [job.id]);
     });
 
-  return { jobId: job.id, operations: ops.length, sites: sites.length, people: staffList.length };
+  return { jobId: job.id, operations: ops.length, sites: sites.length, people: staffList.length, replayed: false };
 }
 
 /**

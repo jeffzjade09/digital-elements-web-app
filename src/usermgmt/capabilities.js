@@ -71,6 +71,12 @@ export function scopesToPersist(data) {
  * `scopes` is applied only when the caller has a real array; null leaves the
  * column untouched, so a failed probe can never change what we believe a site
  * has granted.
+ *
+ * um_hub_scopes is DELIBERATELY ABSENT from this statement. Those are
+ * permissions the dashboard grants to a site (plugin:assign), which the plugin
+ * knows nothing about and never reports — so a probe that wrote them would wipe
+ * them every few minutes, and a revoke made in the dashboard would silently
+ * come back. Two authorities, two columns, and this one only writes the site's.
  */
 async function writeCache(websiteId, { pluginVersion, apiVersion, caps, error, scopes = null }) {
   const { rows } = await query(
@@ -79,7 +85,7 @@ async function writeCache(websiteId, { pluginVersion, apiVersion, caps, error, s
        um_caps_error = $5, um_caps_checked_at = now(),
        um_scopes = coalesce($6::text[], um_scopes)
      where id = $1
-     returning um_key_id, um_scopes, um_enrolled_at, um_plugin_version,
+     returning um_key_id, um_scopes, um_hub_scopes, um_enrolled_at, um_plugin_version,
                um_api_version, um_caps, um_caps_error, um_caps_checked_at`,
     [websiteId, pluginVersion || null, apiVersion || null, caps || [], error || null, scopes]
   );
@@ -95,8 +101,8 @@ async function writeCache(websiteId, { pluginVersion, apiVersion, caps, error, s
  */
 export async function getCapabilities(site, { force = false, maxAgeMs = CACHE_TTL_MS } = {}) {
   const { rows } = await query(
-    `select um_key_id, um_scopes, um_enrolled_at, um_plugin_version, um_api_version,
-            um_caps, um_caps_error, um_caps_checked_at
+    `select um_key_id, um_scopes, um_hub_scopes, um_enrolled_at, um_plugin_version,
+            um_api_version, um_caps, um_caps_error, um_caps_checked_at
        from websites where id = $1`,
     [site.id]
   );
@@ -175,7 +181,10 @@ function shape(site, row, { readiness, error, siteEnrolled, multisite, wpVersion
     apiVersion: apiVersion ?? null,
     requiredApiVersion: REQUIRED_API_VERSION,
     capabilities: caps,
+    // What the SITE has granted us, reported by its plugin on every probe.
     scopes: row.um_scopes || [],
+    // What the DASHBOARD has granted the site. Never touched by a probe.
+    hubScopes: row.um_hub_scopes || [],
     enrolled: enrolledHere,
     enrolledAt: row.um_enrolled_at || null,
     multisite: multisite === true,

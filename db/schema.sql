@@ -192,3 +192,19 @@ create table if not exists wp_role_cache (
 -- website_user_assignments  the intended state, one row per person per site
 -- user_sync_jobs            one administrator action
 -- user_sync_operations      one person on one site — the retry and idempotency unit
+
+-- The site-initiated API (migration 007). Requests FROM a connected website,
+-- signed with that site's own credential.
+--
+-- Two authorities, two columns: websites.um_scopes is SITE-controlled (the
+-- plugin reports it on every probe, which is what makes the client's kill
+-- switch work), and websites.um_hub_scopes is HUB-controlled (plugin:assign) —
+-- never written by a probe, so a dashboard revoke cannot be silently undone.
+create table if not exists site_request_nonces (
+  key_id  text not null,
+  nonce   text not null,
+  seen_at timestamptz not null default now(),
+  primary key (key_id, nonce)
+);
+-- Also added by 007: websites.um_hub_scopes,
+-- user_sync_jobs.idempotency_key (partial unique) and .origin_website_id

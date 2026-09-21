@@ -32,6 +32,8 @@ import { buildImageReport } from "./imageReport.js";
 import { runMigrations } from "./migrate.js";
 import { loadGrants, startGrantRefresh } from "./usermgmt/grants.js";
 import wpUsersRouter from "./routes/wpusers.js";
+import siteApiRouter from "./routes/siteApi.js";
+import { verifySiteRequest, rateLimitPerSite } from "./usermgmt/siteAuth.js";
 import { redeemEnrollmentCode, describeEnrollmentFailure, isConfigured as isUserMgmtConfigured } from "./usermgmt/credentials.js";
 import { record as recordAudit } from "./usermgmt/audit.js";
 import { sweepInterruptedOperations } from "./usermgmt/sync.js";
@@ -57,7 +59,13 @@ requireEnv();
 
 const app = express();
 app.disable("x-powered-by");
-app.use(express.json({ limit: "256kb" }));
+// The raw body is kept because signed requests from connected websites cover
+// the BYTES that arrived. Re-serialising the parsed object would not reproduce
+// them, so the signature would never match.
+app.use(express.json({
+  limit: "256kb",
+  verify: (req, res, buf) => { req.rawBody = buf.toString("utf8"); },
+}));
 
 configureAuth(app, settings);      // session + passport + /auth/* routes
 app.use(sameOriginOnly);           // block cross-origin mutations
@@ -707,6 +715,21 @@ app.delete("/api/landing/:id", requireAuth, requirePerm("manageWebsites"), async
   try { await deleteLandingPage(req.params.id); res.json({ ok: true }); }
   catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
+
+/* ---- The site-initiated API ------------------------------------------------
+ * Requests FROM a connected website, signed with that site's own credential.
+ *
+ * Mounted before the session middleware's audience: these are machine callers,
+ * not browsers, so there is no requireAuth here — identity is the signature,
+ * and verifySiteRequest establishes which site is calling. Note that no route
+ * beneath takes a website id: a site can only ever act as itself.
+ */
+app.use(
+  "/api/site/v1",
+  rateLimitPerSite({ windowMs: 60_000, max: 120 }),
+  verifySiteRequest,
+  siteApiRouter
+);
 
 // ---- Centralized WordPress user management ----
 // Auth, permission and rate limiting are applied once here rather than on each

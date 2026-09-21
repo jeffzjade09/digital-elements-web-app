@@ -14,6 +14,18 @@
 import crypto from "node:crypto";
 
 export const SIGNATURE_VERSION = "DE1-HMAC-SHA256";
+
+/**
+ * The reverse direction: a connected website calling the hub.
+ *
+ * A DIFFERENT version string, deliberately. Both directions share a secret and
+ * a canonical string, so without this a signature captured from a hub->site
+ * request could in principle be presented to the hub. Today that is prevented
+ * only incidentally, because the route strings differ; a distinct version makes
+ * it structural — each side compares the version with hash_equals before doing
+ * anything else, so a signature from one direction cannot validate in the other.
+ */
+export const SITE_SIGNATURE_VERSION = "DE1-SITE-HMAC-SHA256";
 // How far apart the two clocks may be. Long enough to survive ordinary drift
 // and a slow request, short enough that a captured signature is useless by the
 // time anyone could reuse it — and the nonce makes reuse inside the window fail
