@@ -23,6 +23,7 @@ import { getCapabilities } from "../usermgmt/capabilities.js";
 import { getWebsiteSite, query } from "../db.js";
 import { resolveActingStaff, actorRefusalMessage, ACTOR_REFUSALS } from "../usermgmt/siteActor.js";
 import { autoLinkActingUser } from "../usermgmt/autoLink.js";
+import { reconcileFromObserved } from "../usermgmt/reconcile.js";
 import * as audit from "../usermgmt/audit.js";
 
 export const router = express.Router();
@@ -99,6 +100,20 @@ router.post("/roster", requireSiteScope("users:read"), asyncRoute(async (req, re
   const site = await getWebsiteSite(req.site.id);
   if (!site) return fail(res, { code: "unknown_site", message: "This website is no longer registered." }, 404);
 
+  // What the SITE can see, which is the only authority on who exists there.
+  // The plugin looked these up in its own user table to render its panel, so
+  // this costs nothing and covers every assignment without one extra request.
+  // Deliberately BEFORE the roster is built: someone deleted in WP Admin has to
+  // read as absent on this response, not on the next one.
+  let reconciled = null;
+  if (Array.isArray(req.body?.observed) && req.body.observed.length) {
+    reconciled = await reconcileFromObserved(
+      { id: req.site.id, name: req.site.name },
+      req.body.observed,
+      { actorEmail: actor.email, via: "plugin" }
+    );
+  }
+
   const [roster, caps] = await Promise.all([
     buildSiteRoster(req.site.id),
     getCapabilities(site),
@@ -148,6 +163,9 @@ router.post("/roster", requireSiteScope("users:read"), asyncRoute(async (req, re
       linked: autoLink ? autoLink.linked : null,
       linkReason: autoLink ? autoLink.reason : null,
     },
+    // So the panel can say "2 were removed outside the dashboard" rather than
+    // silently showing a different list than it did a minute ago.
+    reconciled,
     generatedAt: new Date().toISOString(),
   });
 }));

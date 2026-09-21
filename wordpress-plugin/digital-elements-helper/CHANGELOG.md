@@ -1,5 +1,39 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.7.2 — Team Members shows what is really on this website
+
+### What was wrong
+
+Team Members took "who is already on this site" from the Digital Elements
+dashboard, which records what it did when it last acted. It cannot know that
+somebody has since deleted an account in **Users** here.
+
+On one site two accounts were deleted that way. The screen went on listing them
+as already present -- and said "everyone is already here" -- while the site
+actually had one user. Anyone trying to put those colleagues back could not:
+the screen would not offer them.
+
+### What changed
+
+The screen now reads this website's own user list. Whether someone is here,
+what role they hold, and whether the account is managed by Digital Elements are
+all taken from WordPress, not from the dashboard's records.
+
+- Somebody removed in **Users** is shown as not here, and can be added again.
+- If the dashboard had believed otherwise, the screen says so, rather than
+  quietly showing a different list than it did last time.
+- The correction is sent back to the dashboard, so its own records stop being
+  wrong for everyone else too.
+
+**Nothing is created, deleted or re-roled to make the two agree.** If somebody
+removed an account on purpose, this notices and reports it -- it does not put
+the account back. Adding a colleague is still an explicit action on this screen.
+
+### For site administrators
+
+Nothing about what this website allows has changed. The plugin reads your user
+list, which it could already do, and writes nothing without you asking.
+
 ## 2.7.1 — Team Members: who it lets in
 
 A fix to 2.7.0, released the same day. **Update to this version if you have

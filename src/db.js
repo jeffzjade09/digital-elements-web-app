@@ -82,12 +82,56 @@ function rowToSite(r) {
       enabled: r.zoho_enabled || false,
       projectIds: r.zoho_project_ids || [],
     },
+    // Carried so anything that receives a site can honour it without a second
+    // query — reconciliation and the scheduler both skip on this.
+    archived: r.archived === true,
+    archivedAt: r.archived_at || null,
+    archivedReason: r.archived_reason || null,
   };
 }
 
 // ---- Websites -------------------------------------------------------------
+/**
+ * THE definition of "the same URL", mirrored by de_normalize_url() in SQL.
+ *
+ *   lowercase, drop the scheme, drop a leading "www.", drop any query or
+ *   fragment, drop the trailing slash.
+ *
+ *   https://WWW.Example.com/   ->  example.com
+ *   http://example.com         ->  example.com
+ *   https://example.com/blog/  ->  example.com/blog
+ *
+ * Two websites rows once carried "https://digitalelementsgroup.com/" and the
+ * picker showed the same site twice, one enrolled and one not. "The same URL"
+ * has to mean one thing in one place or that recurs; the unique index uses the
+ * SQL function, this is what every insert path uses, and a test asserts the two
+ * agree rather than trusting them to.
+ */
+export function normalizeWebsiteUrl(url) {
+  return String(url == null ? "" : url)
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/[?#].*$/, "")
+    .replace(/\/+$/, "");
+}
+
+/**
+ * Every website the dashboard acts on.
+ *
+ * Archived rows are excluded here rather than at each call site, so a row that
+ * was archived stops being checked, listed, counted and picked without anyone
+ * having to remember. `getAllWebsitesIncludingArchived()` is the deliberate
+ * exception, for the one screen that needs to show them.
+ */
 export async function getWebsites() {
-  const { rows } = await query("select * from websites order by name asc");
+  const { rows } = await query("select * from websites where not archived order by name asc");
+  return rows.map(rowToSite);
+}
+
+export async function getAllWebsitesIncludingArchived() {
+  const { rows } = await query("select * from websites order by archived asc, name asc");
   return rows.map(rowToSite);
 }
 
@@ -286,8 +330,11 @@ export async function computeUptime(websiteId, days = 30) {
   return Math.round(((total - failed) / total) * 10000) / 100;
 }
 // License validation lookup (used by the helper plugin's public check).
+// Archived rows are excluded for the same reason they can't use the site API:
+// a site we have stopped acting on should not be validating a plugin either.
 export async function getWebsiteByLicense(key) {
-  const { rows } = await query("select id, name, license_expires_at from websites where license_key = $1", [key]);
+  const { rows } = await query(
+    "select id, name, license_expires_at from websites where license_key = $1 and not archived", [key]);
   if (!rows[0]) return null;
   const exp = rows[0].license_expires_at ? new Date(rows[0].license_expires_at) : null;
   const expired = exp ? exp.getTime() < Date.now() : false;

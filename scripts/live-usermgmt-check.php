@@ -1453,6 +1453,120 @@ if (!$hub_live) {
             echo "[every roster member is already on this site - nothing new to assign]\n";
         }
 
+        echo "\n--- deleted in WP Admin, and the dashboard finds out ---\n";
+        // THE BUG. Two accounts were deleted directly in WP Admin and the
+        // dashboard went on saying "synced", so the panel reported "everyone is
+        // already here" while the site had one user. Reproduced here end to
+        // end: assign someone, delete them the way a person would, and see
+        // whether the next look tells the truth.
+        if ($target && isset($made) && $made) {
+            $victim_id = (int) $made->ID;
+            $victim_email = $target['email'];
+
+            deheled_hub_clear_roster_cache();
+            $before = deheled_hub_get_roster(true);
+            $before_present = null;
+            foreach (deheled_site_users_public_roster($before)['teams'] as $t) {
+                foreach ($t['members'] as $m) {
+                    if (strtolower($m['email']) === strtolower($victim_email)) $before_present = $m;
+                }
+            }
+            ok('the account we just assigned reads as here', $before_present && $before_present['present'] === true);
+
+            // Deleted the way an administrator would do it, with no dashboard
+            // involved at all. No reassignment: there is nothing to reassign,
+            // and this is the case the bug came from.
+            require_once ABSPATH . 'wp-admin/includes/user.php';
+            wp_delete_user($victim_id);
+            clean_user_cache($victim_id);
+            ok('the account is really gone from WordPress', get_user_by('id', $victim_id) === false);
+            $created_ids = array_values(array_filter($created_ids, function ($id) use ($victim_id) {
+                return (int) $id !== $victim_id;
+            }));
+
+            // What the SITE now sees, which is the only authority on this.
+            $observed = deheled_site_users_observe($victim_email);
+            ok('the plugin sees they are not here', $observed['present'] === false);
+
+            deheled_hub_clear_roster_cache();
+            $after = deheled_hub_get_roster(true);
+            ok('the roster still comes back', !is_wp_error($after),
+                is_wp_error($after) ? $after->get_error_message() : '');
+
+            if (!is_wp_error($after)) {
+                $after_member = null;
+                foreach (deheled_site_users_public_roster($after)['teams'] as $t) {
+                    foreach ($t['members'] as $m) {
+                        if (strtolower($m['email']) === strtolower($victim_email)) $after_member = $m;
+                    }
+                }
+                ok('the panel now says they are NOT here',
+                    $after_member && $after_member['present'] === false,
+                    $after_member ? var_export($after_member['present'], true) : 'member missing');
+                ok('...and says the dashboard had thought otherwise',
+                    $after_member && !empty($after_member['hubThought']));
+                ok('...so they are selectable again',
+                    $after_member && $after_member['present'] === false);
+
+                // The dashboard's own rows, corrected from what the site said.
+                ok('the dashboard was told', isset($after['reconciled']) && $after['reconciled'] !== null,
+                    wp_json_encode(isset($after['reconciled']) ? $after['reconciled'] : null));
+                if (!empty($after['reconciled'])) {
+                    ok('...and counted the removal',
+                        (int) $after['reconciled']['removedExternally'] >= 1,
+                        wp_json_encode($after['reconciled']));
+                }
+            }
+
+            echo "\n--- preflight now says 'create', not 'already there' ---\n";
+            $re_pre = deheled_hub_preflight(array($target['id']), 'editor');
+            ok('preflight answers', !is_wp_error($re_pre));
+            if (!is_wp_error($re_pre) && !empty($re_pre['rows'])) {
+                eq_int('one row', count($re_pre['rows']), 1);
+                ok('...predicting create', $re_pre['rows'][0]['action'] === 'create',
+                    $re_pre['rows'][0]['action']);
+            }
+
+            echo "\n--- and they can be added back ---\n";
+            $re_id = 'livecheck-re-' . $suffix;
+            $re_assign = deheled_hub_assign(array($target['id']), 'editor', $re_id, false);
+            ok('the assignment is accepted', !is_wp_error($re_assign),
+                is_wp_error($re_assign) ? $re_assign->get_error_message() : '');
+            if (!is_wp_error($re_assign)) {
+                $re_job = null; $re_view = array();
+                for ($i = 0; $i < 60; $i++) {
+                    $re_job = deheled_hub_job($re_assign['jobId']);
+                    if (is_wp_error($re_job)) break;
+                    $re_view = isset($re_job['job']) ? $re_job['job'] : array();
+                    if (!empty($re_view['done'])) break;
+                    usleep(500000);
+                }
+                ok('the job finishes', !is_wp_error($re_job) && !empty($re_view['done']));
+                wp_cache_flush();
+                $remade = get_user_by('email', $victim_email);
+                ok('the account exists on the site again', $remade !== false);
+                if ($remade) {
+                    $created_ids[] = (int) $remade->ID;
+                    ok('...managed by Digital Elements', deheled_um_user_is_managed($remade->ID));
+                    ok('...with the role asked for', in_array('editor', (array) $remade->roles, true),
+                        implode(',', (array) $remade->roles));
+                }
+
+                deheled_hub_clear_roster_cache();
+                $final = deheled_hub_get_roster(true);
+                if (!is_wp_error($final)) {
+                    $final_member = null;
+                    foreach (deheled_site_users_public_roster($final)['teams'] as $t) {
+                        foreach ($t['members'] as $m) {
+                            if (strtolower($m['email']) === strtolower($victim_email)) $final_member = $m;
+                        }
+                    }
+                    ok('the panel reads as here again', $final_member && $final_member['present'] === true);
+                    ok('...with no stale "removed" flag', $final_member && empty($final_member['hubThought']) === false);
+                }
+            }
+        }
+
         echo "\n--- the gate still refuses the client's own administrator ---\n";
         wp_set_current_user((int) $tm_client);
         ok('the client administrator is refused even with a live dashboard',

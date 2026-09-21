@@ -294,6 +294,12 @@ async function upsertAssignment(op, { state, wpUser, result, errorCode, error, a
        last_error = excluded.last_error,
        last_error_code = excluded.last_error_code,
        last_synced_at = coalesce(excluded.last_synced_at, website_user_assignments.last_synced_at),
+       -- A successful operation is the moment recorded drift stops being true:
+       -- we have just set this person's role, or put them back, so "somebody
+       -- changed this outside the dashboard" is answered. A failure leaves the
+       -- drift standing, because nothing about the site changed.
+       drift = case when excluded.state = 'failed' then website_user_assignments.drift else null end,
+       drift_detail = case when excluded.state = 'failed' then website_user_assignments.drift_detail else null end,
        updated_at = now()`,
     [
       op.staff.id, op.site.id, op.requestedRole,
