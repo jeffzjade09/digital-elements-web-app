@@ -57,12 +57,31 @@ function deheled_um_rest_capabilities($request) {
         // Reported so the dashboard shows the site's real, locally-configured
         // permissions rather than what it thinks it granted.
         'scopes'         => $enrolled ? array_values(deheled_um_scopes()) : array(),
+        // Which website in the dashboard this site's license key belongs to.
+        // The commonest enrollment failure by far is a plugin carrying another
+        // site's key — usually because the install was cloned from a staging
+        // copy — and the refusal the dashboard can safely return says nothing
+        // about why. Reporting it here lets the dashboard warn BEFORE a code is
+        // issued. It is the site's own name, already shown in its own admin
+        // panel, so it discloses nothing new to whoever holds the license key.
+        'license_site'   => deheled_um_license_site_name(),
         'multisite'      => is_multisite(),
         'wp_version'     => get_bloginfo('version'),
         'php_version'    => PHP_VERSION,
         'roles'          => count(wp_roles()->get_names()),
         'generated_at'   => current_time('c'),
     ));
+}
+
+/**
+ * The dashboard website this site's license key is registered to, as the
+ * dashboard itself reported at the last license check. Empty when the key is
+ * unset or has never validated.
+ */
+function deheled_um_license_site_name() {
+    $status = get_option(DEHELED_LIC_STATUS, array());
+    if (!is_array($status) || empty($status['site'])) return '';
+    return (string) $status['site'];
 }
 
 /**

@@ -215,6 +215,11 @@ ok('reports enrollment state', $payload['enrolled'] === true);
 ok('reports the granted scopes', $payload['scopes'] === array_values(deheled_um_default_scopes()));
 ok('reports whether this is multisite', array_key_exists('multisite', $payload));
 ok('reports a role count', is_int($payload['roles']) && $payload['roles'] >= 5);
+// The commonest enrollment failure is a plugin carrying another site's license
+// key. Reporting the linked website lets the dashboard warn before issuing a
+// code, instead of after someone walks over to paste it in.
+ok('reports which website the license is linked to', array_key_exists('license_site', $payload));
+ok('...as a string', is_string($payload['license_site']));
 ok('capabilities is a list', is_array($payload['capabilities']));
 
 // The probe is deliberately answerable before enrollment, so it must disclose

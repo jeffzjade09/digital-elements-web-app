@@ -650,6 +650,16 @@ router.get("/sync-status", asyncRoute(async (req, res) => {
     `select count(*)::int n from user_sync_operations where status = 'interrupted'`
   );
 
+  // Refused enrollments, surfaced here because a site that won't connect is
+  // exactly the thing someone is looking at this page to diagnose — and the
+  // plugin deliberately tells the site nothing useful.
+  const { rows: refusals } = await query(
+    `select website_id, after, at, ip
+       from audit_log
+      where action = 'site.enroll_refused' and at > now() - interval '7 days'
+      order by at desc limit 20`
+  );
+
   const withCounts = caps.map((c) => ({
     ...c,
     assignments: byWebsite.get(c.websiteId) || {},
@@ -670,6 +680,14 @@ router.get("/sync-status", asyncRoute(async (req, res) => {
       createdAt: j.created_at, finishedAt: j.finished_at,
     })),
     interrupted: stuck[0]?.n || 0,
+    enrollmentFailures: refusals.map((r) => ({
+      websiteId: r.website_id,
+      reason: r.after?.reason || "unknown",
+      explanation: r.after?.explanation || null,
+      site: r.after?.site || null,
+      reportedSiteUrl: r.after?.reportedSiteUrl || null,
+      at: r.at,
+    })),
     summary: {
       total: withCounts.length,
       ready: withCounts.filter((c) => c.ready).length,

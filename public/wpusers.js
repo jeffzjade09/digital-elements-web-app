@@ -437,6 +437,7 @@ function wpuRenderUsers() {
         <option value="none"${f.sync === "none" ? " selected" : ""}>No websites yet</option>
       </select>
       ${Object.values(f).some(Boolean) ? '<button class="wpu-linkbtn" onclick="wpuClearFilters()">Clear</button>' : ""}
+      <button class="btn" onclick="wpuAssignFromToolbar()">Add to websites…</button>
       <button class="btn primary" onclick="wpuEditUser()">${ICON.plus} Add person</button>
     </div>
 
@@ -464,6 +465,55 @@ function wpuRenderUsers() {
   // Re-focus the search box after the re-render so typing isn't interrupted.
   const q = document.getElementById("wpu-q");
   if (q && f.q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+
+/**
+ * "Add to websites…" without having ticked anything first.
+ *
+ * The bulk toolbar only appeared once rows were selected, so the main thing
+ * this feature exists to do was invisible until you happened to tick a
+ * checkbox. This button is always there and works on whatever is in front of
+ * you: the selection if there is one, otherwise everyone the current filters
+ * are showing — which is what someone who just filtered to a team means.
+ */
+function wpuAssignFromToolbar() {
+  if (WPU.selected.size) {
+    return wpuStartAssign({ staffIds: [...WPU.selected] });
+  }
+  const visible = wpuFilteredUsers().filter((u) => u.status === "active");
+  if (!visible.length) {
+    return wpuOpenModal({
+      eyebrow: "Website assignment",
+      title: "Nobody to add",
+      body: '<div class="wpu-note">No active people match the current filters. Clear them, or add someone to the roster first.</div>',
+      actions: '<button class="btn-primary" onclick="wpuCloseModal()">Close</button>',
+    });
+  }
+  // Acting on a filtered set is easy to misread, so it is stated and confirmed
+  // rather than assumed.
+  const filtered = Object.values(WPU.filters).some(Boolean);
+  wpuOpenModal({
+    eyebrow: "Website assignment",
+    title: `Add ${visible.length} ${visible.length === 1 ? "person" : "people"} to websites`,
+    body: `
+      <div class="wpu-note" style="margin-bottom:14px">
+        ${filtered
+          ? `Nothing is selected, so this uses everyone the current filters are showing —
+             <strong>${visible.length} ${visible.length === 1 ? "person" : "people"}</strong>.`
+          : `Nothing is selected, so this uses the whole active roster —
+             <strong>${visible.length} ${visible.length === 1 ? "person" : "people"}</strong>.`}
+        You'll pick the websites next, and review everything before anything is applied.
+      </div>
+      <div class="wpu-card" style="max-height:34vh;overflow:auto">
+        <table class="wpu-table"><tbody>
+          ${visible.slice(0, 40).map((u) => `<tr><td>${esc(u.label)}<span class="wpu-sub">${esc(u.email)}</span></td>
+            <td>${u.teamName ? `<span class="wpu-chip team">${esc(u.teamName)}</span>` : '<span class="wpu-chip none">No team</span>'}</td></tr>`).join("")}
+        </tbody></table>
+        ${visible.length > 40 ? `<div class="wpu-note" style="padding:10px 12px">…and ${visible.length - 40} more</div>` : ""}
+      </div>`,
+    actions: `<button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>
+              <button class="btn-primary" onclick="wpuStartAssign({ staffIds: ${JSON.stringify(visible.map((u) => u.id))} })">Choose websites</button>`,
+  });
 }
 
 function wpuSetFilter(key, value) {
@@ -648,6 +698,7 @@ async function wpuRenderWebsites(force) {
       <td data-label="Status">
         <span class="wpu-chip ${esc(state.cls)}" title="${esc(w.message || "")}">${esc(state.label)}</span>
         ${w.multisite ? ' <span class="wpu-chip ext" title="Multisite isn’t supported yet">Multisite</span>' : ""}
+        ${w.licenseMismatch ? ` <span class="wpu-chip bad" title="This site uses ${esc(w.licenseSite)}'s license key">Wrong license</span>` : ""}
       </td>
       <td data-label="Plugin">${w.pluginVersion ? `<span class="wpu-chip role">${esc(w.pluginVersion)}</span>` : '<span class="wpu-chip none">—</span>'}</td>
       <td data-label="Permissions">${w.enrolled && w.scopes.length
@@ -688,9 +739,39 @@ async function wpuRenderWebsites(force) {
     </div>`;
 }
 
+/**
+ * Connect, with the commonest failure caught first.
+ *
+ * A plugin carrying another website's license key is the single most frequent
+ * reason a code is refused — usually because the install was cloned from a
+ * staging copy — and the refusal the dashboard can safely return says nothing
+ * about why. The site reports which website its key belongs to, so this is
+ * knowable BEFORE a code is issued and someone walks to the other site to paste
+ * it in.
+ */
 async function wpuIssueCode(websiteId, options) {
   const rotate = !!(options && options.rotate);
   const site = (WPU.websites || []).find((w) => w.websiteId === websiteId);
+
+  if (!rotate && site && site.licenseMismatch && !(options && options.ignoreMismatch)) {
+    return wpuOpenModal({
+      eyebrow: "Websites",
+      title: `${site.name} looks linked to another website`,
+      body: `
+        <div class="wpu-warnbox">
+          <strong>This site's plugin is linked to “${esc(site.licenseSite)}”, not “${esc(site.name)}”.</strong>
+          A code issued for ${esc(site.name)} will be refused, because the site will
+          present ${esc(site.licenseSite)}'s license key when it tries to redeem it.
+        </div>
+        <div class="wpu-note">
+          Usually this means the install was cloned from another site and kept its
+          license key. Fix it in that site's WP Admin → DE Monitoring by pasting
+          ${esc(site.name)}'s own key, then come back and press Re-check all.
+        </div>`,
+      actions: `<button class="btn-ghost" onclick="wpuCloseModal()">Cancel</button>
+                <button class="btn" onclick="wpuIssueCode('${escJs(websiteId)}', { ignoreMismatch: true })">Generate a code anyway</button>`,
+    });
+  }
   try {
     const res = await wpuApi(`/websites/${websiteId}/${rotate ? "rotate-credential" : "enrollment-code"}`, { method: "POST" });
     wpuShowCode(res, rotate);
@@ -1698,7 +1779,8 @@ async function wpuRenderSync(force) {
         <td data-label="Plugin">${x.pluginVersion
           ? `<span class="wpu-chip role${x.needsPluginUpdate ? " admin-like" : ""}">${esc(x.pluginVersion)}</span>`
           : '<span class="wpu-chip none">unknown</span>'}
-          ${x.needsPluginUpdate ? `<div class="wpu-note">needs contract v${x.requiredApiVersion}</div>` : ""}</td>
+          ${x.needsPluginUpdate ? `<div class="wpu-note">needs contract v${x.requiredApiVersion}</div>` : ""}
+          ${x.licenseMismatch ? `<div class="wpu-blocker">Licensed to “${esc(x.licenseSite)}”</div>` : ""}</td>
         <td data-label="Can do">${(x.capabilities || []).length
           ? x.capabilities.map((c) => `<span class="wpu-chip role">${esc(c)}</span>`).join(" ")
           : '<span class="wpu-chip none">—</span>'}</td>
@@ -1733,6 +1815,19 @@ async function wpuRenderSync(force) {
       </div>
       <button class="btn" onclick="wpuRenderSync(true)">Re-check all</button>
     </div>
+
+    ${(data.enrollmentFailures || []).length ? `<div class="wpu-warnbox">
+      <strong>${data.enrollmentFailures.length} enrollment attempt${data.enrollmentFailures.length === 1 ? " was" : "s were"} refused in the last 7 days.</strong>
+      <div style="margin-top:8px">
+        ${data.enrollmentFailures.slice(0, 6).map((f) => `
+          <div style="margin-bottom:6px">
+            <span class="wpu-audit-when">${esc(wpuWhen(f.at))}</span> —
+            <strong>${esc(f.site || f.reportedSiteUrl || "unknown website")}</strong>:
+            ${esc(f.explanation || f.reason)}
+          </div>`).join("")}
+        ${data.enrollmentFailures.length > 6 ? `<div class="wpu-note">…and ${data.enrollmentFailures.length - 6} more in the activity log.</div>` : ""}
+      </div>
+    </div>` : ""}
 
     ${data.interrupted ? `<div class="wpu-warnbox">
       <strong>${data.interrupted} operation${data.interrupted === 1 ? "" : "s"} were interrupted by a server restart.</strong>
