@@ -512,8 +512,8 @@ is how content gets orphaned, so the route refuses `deleteAccounts` outright.
 ## Adding staff from inside a client's WP Admin
 
 A member of staff already working in a client's WP Admin can add colleagues to
-**that** site without switching to the dashboard. The plugin UI for this arrives
-with 2.7.0; the hub side is described here.
+**that** site without switching to the dashboard: **DE Monitoring → Team
+Members**.
 
 ### The plugin never creates anyone
 
@@ -570,6 +570,78 @@ site. Mitigated by exposing only what the form needs, excluding external
 addresses entirely, per-site rate limits, an independently revocable
 `plugin:assign`, and auditing every read.
 
+### Who can see the screen
+
+Four conditions, **all** required, **all** checked in PHP on every entry point —
+the page callback and each of the four AJAX handlers — never by hiding markup:
+
+1. the license is present, verified and unexpired;
+2. the site is enrolled, granted `users:write`, and the dashboard grants it
+   `plugin:assign`;
+3. the logged-in user holds **both** `edit_users` and `promote_users` here;
+4. the logged-in user is `_de_managed` **and** has an `@digitalelementsgroup.com`
+   address.
+
+Condition 4 is the one that matters. A client's own Administrator holds every
+capability on their own site, so 3 alone would admit them. Being a
+Digital-Elements-managed account is what separates "our staff working here" from
+"the site's owner", and it is checked against user meta the hub writes, not
+against anything the browser sends.
+
+The submenu is registered for `read` and the **callback** enforces the gate,
+rather than the menu being hidden and that trusted. Hiding markup is
+presentation; the callback is the control.
+
+### Why the screen is unavailable, in nine distinct ways
+
+| State | What it means |
+|---|---|
+| `license_missing` | no license key on this site |
+| `license_invalid` | the hub doesn't recognise the key |
+| `license_expired` | the license has run out |
+| `not_enrolled` | user management was never connected here |
+| `write_not_granted` | this site withheld `users:write` |
+| `plugin_assign_not_granted` | the dashboard hasn't permitted this site to assign |
+| `hub_unreachable` | the dashboard didn't answer |
+| `roster_empty` | there is nobody to add yet |
+| `no_permission` | this account may not use the screen |
+
+Each has its own title and its own sentence. Collapsing them into "unavailable"
+would leave whoever hits it with nothing to act on, and these need completely
+different actions — renew a license, connect a site, ask Digital Elements, or
+nothing at all.
+
+**A failed hub call is never a half-rendered page.** The gate runs a second time
+with the roster in hand, so an unreachable dashboard produces the notice and no
+selection UI at all.
+
+### Where the roster comes from
+
+`GET /api/site/v1/roster`, cached in a transient for five minutes. The cache key
+is a hash of the site's **`um_key_id`**, not of the site: rotate or revoke the
+credential and the old roster becomes unreachable rather than continuing to be
+served to a site that has just lost access.
+
+`canAssign` on that response is what tells the plugin whether the dashboard
+still permits assignment. `plugin:assign` is hub-controlled and deliberately
+never reported by the plugin, so without it the panel could only discover a
+revoke by having a submission refused after someone had picked people.
+
+### The flow
+
+Pick people → **Review** (preflight: who exists, who would be created, who is
+blocked) → confirm → assign → poll `GET /jobs/:id` → results.
+
+The browser generates a request id once per submission and sends it back
+unchanged on **Retry**. That is what makes Retry safe: it becomes the
+`Idempotency-Key`, and the hub returns the *same* job rather than starting a
+second one that adds everybody twice.
+
+Non-agency roster members are refused outright — dropped at the hub, and dropped
+again when the roster is shaped for the page. Adding one is a deliberate
+dashboard action with its own confirmation and audit trail, and reproducing that
+inside a client's WP Admin would weaken it.
+
 ### One rule that is a guard, not a boundary
 
 The plugin will refuse to let someone assign a role above their own level on
@@ -581,6 +653,17 @@ So it is a guard against honest mistakes, **not a security boundary**: a
 compromised site could bypass it, but a compromised site can already call
 `wp_create_user()` on itself. The boundaries that *are* real are the hub's —
 role whitelist, `users:admin` scope, agency-domain rule, last-administrator.
+
+It compares the role's declared capabilities against the acting user's
+**assigned** capabilities (`$user->allcaps`), not `current_user_can()`. Stock
+WordPress declares `manage_links` and `unfiltered_upload` on the Editor and
+Administrator roles but denies both in `map_meta_cap` — the Links Manager is off
+by default, and `unfiltered_upload` is granted to nobody. Judged by
+`current_user_can()`, nobody on a default install could ever grant Editor or
+Administrator, including a full administrator. Comparing declared capabilities
+on both sides keeps the two from being measured on different scales. (Found by
+the live check against WordPress 6.3.1; stubs cannot show it, because the denial
+lives in `map_meta_cap`.)
 
 ## Deleting an account
 
@@ -707,6 +790,16 @@ types, reassignment target validation, every deletion refusal, and above all the
 stale-UI case: content created between the check and the delete must refuse.
 `tests/usermgmt-deletion.test.mjs` covers the ownership summary, per-website
 independence, and the team-delete disposition.
+`tests/usermgmt-scopes.test.mjs` covers scope persistence and the two
+authorities.
+`tests/usermgmt-site-api.test.mjs` covers the site API's identification,
+tenancy and response envelope.
+`tests/usermgmt-site-panel.test.php` covers the Team Members panel: every gate
+state, a client's own Administrator refused, the agency-domain rule, the nonce
+on all four AJAX handlers, the capability-subset rule, the roster cache key, and
+that a hub failure becomes a clean unavailable state rather than a half-rendered
+page. It also asserts the plugin never calls `wp_insert_user()` or
+`wp_create_user()`.
 
 All of them run without a database or a WordPress install.
 
@@ -721,5 +814,39 @@ real options API behaves the way the nonce and idempotency stores assume, and
 that an unauthenticated request is genuinely refused. Start MySQL first.
 
 The script **refuses to run against any host that isn't local**, restores the
-site's original options afterwards, and creates, changes or deletes no
-WordPress user. Never point any of this at a client site.
+site's original options afterwards, and removes every user and post it created.
+Never point any of this at a client site.
+
+It also covers the Team Members panel against the real options, user and
+transient APIs — including a real WordPress Administrator who is not
+`_de_managed` being refused, and the capability-subset rule measured against
+real role definitions.
+
+#### The round-trip to a dashboard
+
+Without a hub the panel's **unreachable** path is what gets exercised. To cover
+the whole flow, point it at a local dashboard:
+
+```bash
+UM_LIVE_HUB=http://127.0.0.1:3000 php scripts/live-usermgmt-check.php D:/laragon/www/wordpresstester
+```
+
+That adds roster → preflight → assign → poll → results → retry, and asserts the
+retry returns the *same* job and creates no second account. `DEHELED_HUB_URL` is
+defined by the script before the plugin loads, so a live check can never reach
+the production dashboard; with no `UM_LIVE_HUB` it points at a dead port on
+purpose.
+
+The hub has to be able to call the site back over HTTP. Laragon's Apache is
+broken on this machine (`ServerRoot` points at a missing `httpd-2.4.57`), so the
+rig used for this is PHP's own server with a small router, the same one used
+in #16:
+
+```bash
+php -S 127.0.0.1:8765 -t D:/laragon/www/wordpresstester router.php
+```
+
+The router sets `REQUEST_SCHEME`, which `php -S` does not and this site's
+`wp-config.php` reads — without it a PHP warning is printed before the JSON body
+and nothing can parse the response. That is a property of the rig, not of the
+plugin.

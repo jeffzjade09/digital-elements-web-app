@@ -55,6 +55,16 @@ if (!isset($_SERVER['REQUEST_URI']))    $_SERVER['REQUEST_URI'] = '/';
 if (!isset($_SERVER['SCRIPT_NAME']))    $_SERVER['SCRIPT_NAME'] = '/index.php';
 
 define('WP_USE_THEMES', false);
+
+// The Team Members panel calls OUT to the dashboard. Point it at a local hub
+// before the plugin defines its default, so a live check can never reach the
+// production dashboard. With no hub running, the panel's unreachable path is
+// what gets exercised - which is itself worth checking.
+if (!defined('DEHELED_HUB_URL')) {
+    $um_live_hub = getenv('UM_LIVE_HUB');
+    define('DEHELED_HUB_URL', $um_live_hub ? rtrim($um_live_hub, '/') : 'http://127.0.0.1:59999');
+}
+
 require_once rtrim($wp_root, '/\\') . '/wp-load.php';
 require_once $de_plugin_path;
 
@@ -940,6 +950,416 @@ $caps_last = deheled_um_rest_capabilities(new WP_REST_Request('GET', '/de/v2/cap
 foreach (array('users.read', 'users.write', 'users.delete', 'content.reassign', 'content.read') as $cap) {
     ok("$cap is advertised", in_array($cap, $caps_last['capabilities'], true));
 }
+
+/* ==========================================================================
+ * The Team Members panel (2.7.0)
+ *
+ * The de/v2 sections above prove the hub can act on this site. This section
+ * proves the reverse direction: what someone standing in this site's WP Admin
+ * can and — mostly — cannot do.
+ *
+ * Everything here runs against the real options, user and transient APIs. The
+ * hub round-trip at the end only runs when UM_LIVE_HUB names a dashboard that
+ * answers; without one, the unreachable path is checked instead, which is the
+ * state a client site would actually hit if the dashboard were down.
+ * ========================================================================== */
+
+echo "\n=== Team Members: the panel is wired up ===\n";
+
+ok('the panel is loaded', function_exists('deheled_site_users_gate'));
+ok('the hub client is loaded', function_exists('deheled_hub_request'));
+ok('site.assign is advertised to the dashboard',
+    in_array('site.assign', deheled_um_capability_list(), true));
+
+
+echo "\n=== Team Members: the gate, against this site's real options ===\n";
+
+// Park the site in each state in turn and read back what the gate says. The
+// enrollment options are restored by the shutdown handler registered earlier;
+// the license options get their own, registered here.
+$panel_saved_license = get_option(DEHELED_LICENSE_OPTION, null);
+$panel_saved_status  = get_option(DEHELED_LIC_STATUS, null);
+register_shutdown_function(function () use ($panel_saved_license, $panel_saved_status) {
+    if ($panel_saved_license === null) delete_option(DEHELED_LICENSE_OPTION);
+    else update_option(DEHELED_LICENSE_OPTION, $panel_saved_license, 'no');
+    if ($panel_saved_status === null) delete_option(DEHELED_LIC_STATUS);
+    else update_option(DEHELED_LIC_STATUS, $panel_saved_status, 'no');
+    echo "[restored the site's license options]\n";
+});
+
+/** Puts the site in the fully-connected state the panel needs. */
+function panel_connect() {
+    update_option(DEHELED_LICENSE_OPTION, 'DEG-LIVE-CHECK-0000-0000', 'no');
+    update_option(DEHELED_LIC_STATUS, array('valid' => true, 'expired' => false, 'checked_at' => time()), 'no');
+    update_option(DEHELED_UM_KEY_ID, 'dek_livecheck', 'no');
+    update_option(DEHELED_UM_SECRET, 'live-check-secret', 'no');
+    update_option(DEHELED_UM_SCOPES, deheled_um_default_scopes(), 'no');
+    update_option(DEHELED_UM_ENROLLED, time(), 'no');
+}
+function panel_state($roster = null) {
+    $g = deheled_site_users_gate($roster);
+    return $g['state'];
+}
+
+// A staff account as the hub would have created it: managed, agency address,
+// administrator on this site.
+$tm_staff = wp_insert_user(array(
+    'user_login' => 'de-lc-staff-' . $suffix,
+    'user_email' => "de-livecheck-staff-$suffix@digitalelementsgroup.com",
+    'user_pass'  => wp_generate_password(32, true, true),
+    'role'       => 'administrator',
+));
+if (!is_wp_error($tm_staff)) {
+    $created_ids[] = (int) $tm_staff;
+    update_user_meta($tm_staff, DEHELED_UM_MANAGED_META, '1');
+}
+
+// The client's own administrator: every capability, not ours.
+$tm_client = wp_insert_user(array(
+    'user_login' => 'de-lc-tmclient-' . $suffix,
+    'user_email' => "de-livecheck-tmclient-$suffix@example.com",
+    'user_pass'  => wp_generate_password(32, true, true),
+    'role'       => 'administrator',
+));
+if (!is_wp_error($tm_client)) $created_ids[] = (int) $tm_client;
+
+// One of ours, but only editor-level, with the two user capabilities added.
+$tm_editor = wp_insert_user(array(
+    'user_login' => 'de-lc-editor-' . $suffix,
+    'user_email' => "de-livecheck-editor-$suffix@digitalelementsgroup.com",
+    'user_pass'  => wp_generate_password(32, true, true),
+    'role'       => 'editor',
+));
+if (!is_wp_error($tm_editor)) {
+    $created_ids[] = (int) $tm_editor;
+    update_user_meta($tm_editor, DEHELED_UM_MANAGED_META, '1');
+    $tm_editor_user = new WP_User($tm_editor);
+    $tm_editor_user->add_cap('edit_users');
+    $tm_editor_user->add_cap('promote_users');
+}
+
+ok('a staff account was created for the check', !is_wp_error($tm_staff));
+ok('a client administrator was created for the check', !is_wp_error($tm_client));
+ok('an editor-level staff account was created for the check', !is_wp_error($tm_editor));
+
+wp_set_current_user((int) $tm_staff);
+
+// Registering the submenu is what puts the link in the menu; the callback is
+// what actually decides. Both are checked, here and below.
+$GLOBALS['submenu'] = isset($GLOBALS['submenu']) ? $GLOBALS['submenu'] : array();
+do_action('admin_menu');
+$tm_registered = false;
+foreach ((array) $GLOBALS['submenu'] as $parent => $items) {
+    foreach ((array) $items as $item) {
+        if (isset($item[2]) && $item[2] === DEHELED_SITE_USERS_PAGE) {
+            $tm_registered = true;
+            ok('the panel lives under DE Monitoring', $parent === 'deheled-monitor', (string) $parent);
+        }
+    }
+}
+ok('the Team Members submenu is registered', $tm_registered);
+
+delete_option(DEHELED_LICENSE_OPTION);
+ok('no license key -> license_missing', panel_state() === 'license_missing', panel_state());
+
+panel_connect();
+update_option(DEHELED_LIC_STATUS, array('valid' => false, 'expired' => true, 'checked_at' => time()), 'no');
+ok('an expired license -> license_expired', panel_state() === 'license_expired', panel_state());
+
+update_option(DEHELED_LIC_STATUS, array('valid' => false, 'expired' => false, 'checked_at' => time()), 'no');
+ok('an unrecognised license -> license_invalid', panel_state() === 'license_invalid', panel_state());
+
+panel_connect();
+delete_option(DEHELED_UM_KEY_ID);
+delete_option(DEHELED_UM_SECRET);
+ok('not enrolled -> not_enrolled', panel_state() === 'not_enrolled', panel_state());
+
+panel_connect();
+update_option(DEHELED_UM_SCOPES, array('users:read'), 'no');
+ok('users:write withheld by this site -> write_not_granted',
+    panel_state() === 'write_not_granted', panel_state());
+
+panel_connect();
+ok('a fully connected staff account -> available', panel_state() === 'available', panel_state());
+
+echo "\n=== Team Members: who the gate refuses ===\n";
+
+// The check this whole feature stands on. This account is a real administrator
+// on a real WordPress install and holds every capability there is.
+wp_set_current_user((int) $tm_client);
+ok('the client\'s own administrator is refused', panel_state() === 'no_permission', panel_state());
+$client_gate = deheled_site_users_gate();
+ok('...and told it is for Digital Elements accounts',
+    strpos($client_gate['message'], 'Digital Elements') !== false, $client_gate['message']);
+
+// Flagging that account managed is not enough on its own — the address still
+// isn't ours. Removed again immediately afterwards.
+update_user_meta($tm_client, DEHELED_UM_MANAGED_META, '1');
+ok('...still refused when flagged managed, because of the address',
+    panel_state() === 'no_permission', panel_state());
+delete_user_meta($tm_client, DEHELED_UM_MANAGED_META);
+
+// And one of ours without the flag is refused too: both are required, so
+// neither alone is a way in.
+wp_set_current_user((int) $tm_staff);
+delete_user_meta($tm_staff, DEHELED_UM_MANAGED_META);
+ok('an agency address that is not managed is refused', panel_state() === 'no_permission', panel_state());
+update_user_meta($tm_staff, DEHELED_UM_MANAGED_META, '1');
+
+// A subscriber-level staff account: ours, managed, but with no business
+// touching users here.
+$tm_low = wp_insert_user(array(
+    'user_login' => 'de-lc-low-' . $suffix,
+    'user_email' => "de-livecheck-low-$suffix@digitalelementsgroup.com",
+    'user_pass'  => wp_generate_password(32, true, true),
+    'role'       => 'subscriber',
+));
+if (!is_wp_error($tm_low)) {
+    $created_ids[] = (int) $tm_low;
+    update_user_meta($tm_low, DEHELED_UM_MANAGED_META, '1');
+    wp_set_current_user((int) $tm_low);
+    ok('a managed staff account without edit_users is refused',
+        panel_state() === 'no_permission', panel_state());
+}
+
+echo "\n=== Team Members: the capability-subset rule, against real roles ===\n";
+
+wp_set_current_user((int) $tm_editor);
+ok('an editor-level account may grant Editor', deheled_site_users_can_grant_role('editor'));
+ok('...and Author', deheled_site_users_can_grant_role('author'));
+ok('...but NOT Administrator', deheled_site_users_can_grant_role('administrator') === false);
+$editor_roles = deheled_site_users_grantable_roles();
+ok('...so Administrator is never offered to them',
+    !isset($editor_roles['administrator']), implode(',', array_keys($editor_roles)));
+ok('...while Editor is', isset($editor_roles['editor']));
+
+wp_set_current_user((int) $tm_staff);
+ok('an administrator may grant Administrator', deheled_site_users_can_grant_role('administrator'));
+$admin_roles = deheled_site_users_grantable_roles();
+ok('...and it is flagged as administering the site',
+    !empty($admin_roles['administrator']['site_admin']));
+ok('an invented role is refused', deheled_site_users_can_grant_role('superuser') === false);
+
+echo "\n=== Team Members: the roster cache is tied to the credential ===\n";
+
+panel_connect();
+$cache_key_a = deheled_hub_roster_cache_key();
+set_transient($cache_key_a, array('ok' => true, 'canAssign' => true, 'teams' => array()), 60);
+ok('a cached roster is read back', is_array(get_transient($cache_key_a)));
+
+update_option(DEHELED_UM_KEY_ID, 'dek_rotated_' . $suffix, 'no');
+$cache_key_b = deheled_hub_roster_cache_key();
+ok('rotating the credential changes the cache key', $cache_key_a !== $cache_key_b);
+ok('...so the old roster is unreachable', get_transient($cache_key_b) === false);
+delete_transient($cache_key_a);
+panel_connect();
+
+echo "\n=== Team Members: an unreachable dashboard is a clean state ===\n";
+
+$hub_live = false;
+$probe = wp_remote_get(DEHELED_HUB_URL . '/healthz', array('timeout' => 5));
+if (!is_wp_error($probe)) $hub_live = true;
+
+if (!$hub_live) {
+    deheled_hub_clear_roster_cache();
+    $roster = deheled_hub_get_roster(true);
+    ok('an unreachable dashboard returns an error, not a roster', is_wp_error($roster));
+    ok('...coded hub_unreachable', is_wp_error($roster) && $roster->get_error_code() === 'hub_unreachable');
+    ok('...which the gate turns into its own state',
+        panel_state($roster) === 'hub_unreachable', panel_state($roster));
+
+    // The thing that must never happen: a page that looks usable when it isn't.
+    wp_set_current_user((int) $tm_staff);
+    ob_start();
+    deheled_site_users_render();
+    $html = ob_get_clean();
+    ok('the page renders the unavailable notice', strpos($html, 'reach Digital Elements') !== false);
+    ok('...and no selection UI at all', strpos($html, 'deheled-tm-root') === false);
+    ok('...and leaks no credential', strpos($html, 'live-check-secret') === false
+        && strpos($html, 'DEG-LIVE-CHECK') === false);
+
+    echo "\n[no dashboard at " . DEHELED_HUB_URL . " - the roster round-trip was not exercised.\n"
+       . " Start the hub and re-run with UM_LIVE_HUB=http://127.0.0.1:3000 to cover it.]\n";
+} else {
+    echo "[dashboard responding at " . DEHELED_HUB_URL . "]\n";
+    echo "\n=== Team Members: the round-trip to the dashboard ===\n";
+
+    // Uses whatever credential this site is genuinely enrolled with, so this
+    // only runs after the site has been connected from the dashboard.
+    foreach ($saved as $saved_name => $saved_value) {
+        if ($saved_value !== null) update_option($saved_name, $saved_value, 'no');
+    }
+    if ($panel_saved_license !== null) update_option(DEHELED_LICENSE_OPTION, $panel_saved_license, 'no');
+    if ($panel_saved_status !== null) update_option(DEHELED_LIC_STATUS, $panel_saved_status, 'no');
+
+    deheled_hub_clear_roster_cache();
+    $roster = deheled_hub_get_roster(true);
+    ok('the roster comes back', !is_wp_error($roster),
+        is_wp_error($roster) ? $roster->get_error_code() . ': ' . $roster->get_error_message() : '');
+
+    if (!is_wp_error($roster)) {
+        ok('the dashboard permits this site to assign', !empty($roster['canAssign']));
+        ok('the gate opens', panel_state($roster) === 'available', panel_state($roster));
+
+        $public = deheled_site_users_public_roster($roster);
+        $members = array();
+        foreach ($public['teams'] as $public_team) {
+            foreach ($public_team['members'] as $public_member) $members[] = $public_member;
+        }
+        ok('at least one team member is offered', count($members) > 0);
+
+        $non_agency = 0;
+        foreach ($members as $m) {
+            if (substr(strtolower($m['email']), -strlen('@digitalelementsgroup.com')) !== '@digitalelementsgroup.com') {
+                $non_agency++;
+            }
+        }
+        eq_int('no non-agency address reaches the page', $non_agency, 0);
+        ok('the roster carries no secret', strpos(wp_json_encode($public), 'secret') === false);
+
+        // The hub acts FOR a person, not for a site: it resolves the acting
+        // WordPress user against the roster and refuses if they aren't on it.
+        // Worth proving before anything else, because in production the person
+        // using this screen is always a hub-created account and so always is.
+        echo "\n--- the acting WordPress user must be on the roster ---\n";
+        $stranger = deheled_hub_assign(array($members[0]['id']), 'editor', 'stranger-' . $suffix, false);
+        ok('an agency account the dashboard has never heard of is refused',
+            is_wp_error($stranger), 'the assignment was accepted');
+        ok('...without saying why, beyond that it was refused',
+            is_wp_error($stranger) && strpos($stranger->get_error_message(), 'roster') === false);
+
+        // Someone not already on this site, so the preflight has something to
+        // say and the assignment has something to do.
+        $target = null;
+        foreach ($members as $m) { if (empty($m['present'])) { $target = $m; break; } }
+
+        // ...and from here the check acts as a real member of staff, which is
+        // what the panel is for. A second roster member, created locally and
+        // marked managed, exactly as the hub would have left them.
+        $actor_member = null;
+        foreach ($members as $m) {
+            if (!$target || $m['id'] !== $target['id']) { $actor_member = $m; break; }
+        }
+        if ($actor_member) {
+            $existing_actor = get_user_by('email', $actor_member['email']);
+            if ($existing_actor) {
+                $tm_actor = (int) $existing_actor->ID;
+            } else {
+                $tm_actor = wp_insert_user(array(
+                    'user_login' => 'de-lc-actor-' . $suffix,
+                    'user_email' => $actor_member['email'],
+                    'user_pass'  => wp_generate_password(32, true, true),
+                    'role'       => 'administrator',
+                ));
+                if (!is_wp_error($tm_actor)) $created_ids[] = (int) $tm_actor;
+            }
+            if (!is_wp_error($tm_actor)) {
+                update_user_meta($tm_actor, DEHELED_UM_MANAGED_META, '1');
+                wp_set_current_user((int) $tm_actor);
+                ok('a roster member using the panel passes the gate',
+                    panel_state($roster) === 'available', panel_state($roster));
+                echo "    acting as " . $actor_member['email'] . "\n";
+            }
+        }
+
+        if ($target) {
+            echo "\n--- preflight ---\n";
+            $pre = deheled_hub_preflight(array($target['id']), 'editor');
+            ok('preflight answers', !is_wp_error($pre),
+                is_wp_error($pre) ? $pre->get_error_message() : '');
+            if (!is_wp_error($pre) && !empty($pre['rows'])) {
+                $row = $pre['rows'][0];
+                ok('...with a row for the person chosen', $row['staffUserId'] === $target['id']);
+                ok('...saying whether the account exists or would be created',
+                    in_array($row['action'], array('create', 'link', 'update', 'noop', 'blocked'), true),
+                    isset($row['action']) ? $row['action'] : '?');
+                echo "    " . $target['email'] . " -> " . $row['action'] . "\n";
+            }
+
+            echo "\n--- assign ---\n";
+            $request_id = 'livecheck-' . $suffix;
+            $res = deheled_hub_assign(array($target['id']), 'editor', $request_id, false);
+            ok('the assignment is accepted', !is_wp_error($res),
+                is_wp_error($res) ? $res->get_error_message() : '');
+
+            if (!is_wp_error($res)) {
+                $job_id = isset($res['jobId']) ? $res['jobId'] : '';
+                ok('...and comes back with a job to poll', $job_id !== '');
+
+                $job = null;
+                $view = array();
+                for ($i = 0; $i < 60; $i++) {
+                    $job = deheled_hub_job($job_id);
+                    if (is_wp_error($job)) break;
+                    $view = isset($job['job']) ? $job['job'] : array();
+                    if (!empty($view['done'])) break;
+                    usleep(500000);
+                }
+                ok('the job finishes', !is_wp_error($job) && !empty($view['done']),
+                    is_wp_error($job) ? $job->get_error_message() : (isset($view['status']) ? $view['status'] : '?'));
+
+                if (!is_wp_error($job)) {
+                    echo "    job $job_id -> " . (isset($view['status']) ? $view['status'] : '?') . "\n";
+                    foreach ((array) (isset($view['operations']) ? $view['operations'] : array()) as $item) {
+                        echo "    " . $item['staffEmail'] . ": " . $item['status']
+                           . (!empty($item['error']) ? ' - ' . $item['error'] : '') . "\n";
+                    }
+                    // Only this site's work comes back - a job is never a window
+                    // onto what the dashboard did elsewhere.
+                    ok('every operation reported belongs to this site',
+                        count($view['operations']) === 1, count($view['operations']) . ' operation(s)');
+                    wp_cache_flush();
+                    $made = get_user_by('email', $target['email']);
+                    ok('the account now exists on this site', $made !== false);
+                    if ($made) {
+                        $created_ids[] = (int) $made->ID;
+                        ok('...marked as managed by Digital Elements',
+                            deheled_um_user_is_managed($made->ID));
+                        ok('...with the role asked for', in_array('editor', (array) $made->roles, true),
+                            implode(',', (array) $made->roles));
+                    }
+                }
+
+                echo "\n--- retry with the same request id ---\n";
+                $before = count_users();
+                $again = deheled_hub_assign(array($target['id']), 'editor', $request_id, false);
+                ok('a retry is accepted', !is_wp_error($again),
+                    is_wp_error($again) ? $again->get_error_message() : '');
+                if (!is_wp_error($again)) {
+                    ok('...and returns the SAME job', $again['jobId'] === $job_id,
+                        $again['jobId'] . ' vs ' . $job_id);
+                    ok('...recognised as a replay', !empty($again['replayed']));
+                }
+                wp_cache_flush();
+                $after = count_users();
+                eq_int('no second account was created',
+                    (int) $after['total_users'], (int) $before['total_users']);
+            }
+        } else {
+            echo "[every roster member is already on this site - nothing new to assign]\n";
+        }
+
+        echo "\n--- the gate still refuses the client's own administrator ---\n";
+        wp_set_current_user((int) $tm_client);
+        ok('the client administrator is refused even with a live dashboard',
+            panel_state($roster) === 'no_permission', panel_state($roster));
+        ob_start();
+        deheled_site_users_render();
+        $html = ob_get_clean();
+        ok('...and gets no selection UI', strpos($html, 'deheled-tm-root') === false);
+        wp_set_current_user((int) $tm_staff);
+    }
+}
+
+echo "\n=== Team Members: the rendered page leaks nothing ===\n";
+panel_connect();
+wp_set_current_user((int) $tm_staff);
+ob_start();
+deheled_site_users_render();
+$html = ob_get_clean();
+ok('no license key in the markup', strpos($html, 'DEG-LIVE-CHECK') === false);
+ok('no signing secret in the markup', strpos($html, 'live-check-secret') === false);
+ok('no key id in the markup', strpos($html, 'dek_livecheck') === false);
 
 echo "\n" . ($fail ? "FAILED — $fail check(s) failed\n" : "OK — all checks passed\n");
 exit($fail ? 1 : 0);
