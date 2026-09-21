@@ -95,5 +95,9 @@ function deheled_um_capability_list() {
     if (function_exists('deheled_um_rest_delete_user'))    $caps[] = 'users.delete';
     if (function_exists('deheled_um_rest_reassign'))       $caps[] = 'content.reassign';
     if (function_exists('deheled_um_rest_content'))        $caps[] = 'content.read';
+    // This build can ask the hub to add staff from inside WP Admin. Advertised
+    // so the dashboard can tell which sites have the panel without inspecting
+    // version numbers.
+    if (function_exists('deheled_hub_assign'))             $caps[] = 'site.assign';
     return $caps;
 }

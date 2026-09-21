@@ -90,6 +90,13 @@ router.get("/roster", requireSiteScope("users:read"), asyncRoute(async (req, res
     // rather than offering something that fails at preflight.
     siteRoles: roles.roles.map((r) => ({ slug: r.slug, name: r.name, siteAdmin: r.siteAdmin === true })),
     scopes: req.site.scopes,
+    // Whether the DASHBOARD permits this site's plugin to assign staff. The
+    // plugin cannot know this on its own — plugin:assign is hub-controlled and
+    // deliberately never reported by the plugin — so without it the panel could
+    // only discover a revoke by having a submission refused. Reported here so
+    // the site renders "not permitted" up front instead of after someone has
+    // picked people.
+    canAssign: req.site.effectiveScopes.includes("plugin:assign"),
     readiness: caps.readiness,
     generatedAt: new Date().toISOString(),
   });

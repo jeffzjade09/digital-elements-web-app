@@ -70,6 +70,11 @@ require_once DEHELED_PLUGIN_DIR . 'includes/license.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/updater.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/admin.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/um-admin.php';
+// Adding colleagues to this site from inside WP Admin. The plugin never creates
+// a user itself — it asks the hub, which creates the account through the same
+// de/v2 path it always has. See includes/um-hub-client.php.
+require_once DEHELED_PLUGIN_DIR . 'includes/um-hub-client.php';
+require_once DEHELED_PLUGIN_DIR . 'includes/um-site-users.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/analytics.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/llms.php';
 require_once DEHELED_PLUGIN_DIR . 'includes/optimize.php';

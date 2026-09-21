@@ -229,6 +229,15 @@ Setting it up:
 4. That site's administrator decides whether we may **delete users** or **grant
    Administrator**. Both are off by default and only they can turn them on.
 
+Staff already working in a client's WP Admin can add colleagues to **that** site
+from **DE Monitoring → Team Members**, without opening the dashboard. The plugin
+never creates the account: it sends a signed request and the hub creates it
+through the same path the dashboard uses. The screen is only reachable by a
+Digital-Elements-managed `@digitalelementsgroup.com` account that holds
+`edit_users` and `promote_users` there — a client's own Administrator never sees
+or reaches it — and only while the dashboard permits that site to assign, which
+is revocable per site from the Websites tab.
+
 Administrator is a permitted team and per-user default — this agency administers
 the sites it builds. It stays gated by the per-site `users:admin` scope, which
 only that site's own administrator can grant, and by a single confirmation
@@ -295,6 +304,12 @@ tests/usermgmt-scopes.test.mjs      that a site's granted scopes are persisted
                                     on every probe, in both directions. The
                                     round-trip half needs DATABASE_URL and
                                     skips without it
+tests/usermgmt-site-panel.test.php  the plugin's Team Members screen: every
+                                    unavailable state, a client's own
+                                    Administrator refused, the agency-domain
+                                    rule, the nonce on every handler, the
+                                    capability-subset rule, and that the plugin
+                                    never creates a user itself
 ```
 
 ### Live check against a real WordPress install
