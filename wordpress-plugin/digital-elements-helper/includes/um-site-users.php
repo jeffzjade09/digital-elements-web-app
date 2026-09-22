@@ -281,7 +281,9 @@ add_action('admin_enqueue_scripts', function ($hook) {
     if (strpos((string) $hook, DEHELED_SITE_USERS_PAGE) === false) return;
     wp_enqueue_style('deheled-admin', DEHELED_PLUGIN_URL . 'assets/admin.css', array(), DEHELED_VERSION);
     wp_enqueue_style('deheled-team-members', DEHELED_PLUGIN_URL . 'assets/um-site-users.css', array('deheled-admin'), DEHELED_VERSION);
-    wp_enqueue_script('deheled-team-members', DEHELED_PLUGIN_URL . 'assets/um-site-users.js', array(), DEHELED_VERSION, true);
+    // Loaded first and depended on, so the panel can assume it is there.
+    wp_enqueue_script('deheled-tm-progress', DEHELED_PLUGIN_URL . 'assets/um-progress.js', array(), DEHELED_VERSION, true);
+    wp_enqueue_script('deheled-team-members', DEHELED_PLUGIN_URL . 'assets/um-site-users.js', array('deheled-tm-progress'), DEHELED_VERSION, true);
     wp_localize_script('deheled-team-members', 'DEHELED_TM', array(
         'ajaxUrl' => admin_url('admin-ajax.php'),
         'nonce'   => wp_create_nonce('deheled_site_users'),
@@ -295,6 +297,8 @@ add_action('admin_enqueue_scripts', function ($hook) {
             'refreshing'   => 'Refreshing the roster…',
             'loaded'       => 'Roster updated.',
             'kept'         => 'Couldn\'t refresh. Showing what was already loaded.',
+            'busy'         => 'Something else is still running. Wait for it to finish.',
+            'timedOut'     => 'This is taking longer than expected. It may still be running — try again, or reload the page to see where it got to.',
         ),
     ));
 });
