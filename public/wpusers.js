@@ -375,6 +375,162 @@ function wpuAssignmentsFor(staffUserId) {
   return (WPU.assignments || []).filter((a) => a.staffUserId === staffUserId);
 }
 
+/* --------------------------------------------------------- syncing users -- */
+
+/**
+ * One sync at a time, with a watchdog — the same shape as the plugin panel's
+ * guard from #25, and for the same two reasons: a second click must not become
+ * a second set of outbound requests, and a request that never answers must not
+ * leave a button disabled forever.
+ *
+ * NOT the same file. That one ships inside the plugin zip to client sites and
+ * is loaded by WordPress; this is the dashboard. Sharing the module would mean
+ * the dashboard serving plugin internals or a build step copying it, and
+ * neither is worth it for this much logic — so the semantics are kept identical
+ * and both are covered by tests.
+ */
+const WPU_SYNC = WPU_GUARD.createGuard({
+  onChange(e) {
+    wpuSyncPaint();
+    if (e.type === "timeout") {
+      // Always give the screen back. The sync may still be finishing on the
+      // server, so the wording says so rather than claiming it failed.
+      wpuSyncMessage("That took longer than expected. It may still be running — reload to see where it got to.", "warn");
+    }
+  },
+});
+
+function wpuSyncBegin(what) { return WPU_SYNC.begin(what); }
+function wpuSyncEnd() { WPU_SYNC.end(); }
+
+/** Mutates the buttons in place — never re-renders them to disable them. */
+function wpuSyncPaint() {
+  const busy = WPU_SYNC.isRunning();
+  ["wpuSyncAllBtn", "wpuSyncSelBtn"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = busy;
+    el.setAttribute("aria-disabled", busy ? "true" : "false");
+    if (id === "wpuSyncAllBtn") {
+      el.innerHTML = busy && WPU_SYNC.current() !== "person"
+        ? '<span class="spinner"></span> Syncing…' : "Sync users";
+    }
+  });
+  document.querySelectorAll('[id^="wpu-sync-"]').forEach((el) => {
+    el.disabled = busy;
+    el.setAttribute("aria-disabled", busy ? "true" : "false");
+  });
+}
+
+function wpuSyncMessage(text, kind) {
+  const el = document.getElementById("wpuBulkMsg") || document.getElementById("wpuSyncNote");
+  if (!el) return;
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
+  el.textContent = text;
+  if (kind) el.className = "wpu-msg " + kind;
+}
+
+/** Turns a reconcile summary into a sentence rather than a count nobody reads. */
+function wpuSyncSummary(reconciled) {
+  const t = (reconciled && reconciled.totals) || {};
+  const bits = [];
+  if (t.checked) bits.push(`${t.checked} checked`);
+  if (t.removedExternally) bits.push(`${t.removedExternally} removed outside the dashboard`);
+  if (t.roleChanged) bits.push(`${t.roleChanged} role changed`);
+  if (t.unmanaged) bits.push(`${t.unmanaged} no longer managed`);
+  if (t.resolved) bits.push(`${t.resolved} back in step`);
+  // A site that was rate-limited or unreachable told us nothing. Saying so is
+  // the difference between "nobody was removed" and "we didn't get to ask".
+  if (t.skipped) bits.push(`${t.skipped} couldn't be checked`);
+  if (!bits.length) return "Nothing to check.";
+  return bits.join(", ") + ".";
+}
+
+async function wpuRunSync(url, body, what) {
+  if (!wpuSyncBegin(what)) return;
+  wpuSyncMessage("Asking the websites who is on them…");
+  try {
+    const res = await wpuApi(url, { method: "POST", body: body || {} });
+    if (res.ok === false) { wpuSyncMessage(res.error || "Couldn't sync.", "warn"); return; }
+    // Re-read the rows the sync just changed, so the freshness note and the
+    // counts both move. Without this the screen would say "verified just now"
+    // over numbers it hadn't re-fetched.
+    WPU.assignments = (await wpuApi("/assignments")).assignments || [];
+    wpuRenderPanel();
+    wpuSyncMessage(wpuSyncSummary(res.reconciled), "ok");
+  } catch (err) {
+    wpuSyncMessage(err.message || "Couldn't sync.", "warn");
+  } finally {
+    wpuSyncEnd();
+  }
+}
+
+function wpuSyncAll() { return wpuRunSync("/sync-users", {}, "all"); }
+function wpuSyncPerson(id) { return wpuRunSync(`/users/${encodeURIComponent(id)}/sync`, {}, "person"); }
+function wpuSyncSelected() {
+  if (!WPU.selected.size) return;
+  return wpuRunSync("/sync-users", { staffUserIds: [...WPU.selected] }, "selected");
+}
+function wpuSyncSite(id) { return wpuRunSync(`/websites/${encodeURIComponent(id)}/sync-users`, {}, "site"); }
+
+/* ------------------------------------------------------------ freshness --- */
+
+/**
+ * How long ago we last ASKED, in words.
+ *
+ * The complaint underneath all of this: a count nobody has verified since
+ * September and one confirmed a minute ago rendered identically, so the screen
+ * looked equally confident about both. Recency is the missing half of the
+ * number, not a decoration on it.
+ */
+function wpuAgo(iso) {
+  if (!iso) return null;
+  const then = new Date(iso);
+  if (isNaN(then)) return null;
+  const mins = Math.floor((Date.now() - then.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hrs / 24);
+  // Past a couple of days "43 hours ago" stops meaning anything; a date does.
+  if (days <= 2) return `${days} day${days === 1 ? "" : "s"} ago`;
+  return then.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/** The most recent verification across a set of assignments. */
+function wpuLastVerified(assignments) {
+  let newest = null;
+  for (const a of assignments) {
+    if (!a.lastReconciledAt) return null;   // one never-verified row makes the whole set unverified
+    const t = new Date(a.lastReconciledAt).getTime();
+    if (!newest || t < newest) newest = t;  // the OLDEST, so the chip can't overstate
+  }
+  return newest ? new Date(newest).toISOString() : null;
+}
+
+/**
+ * The freshness note beside a count.
+ *
+ * Deliberately states staleness as loudly as recency: "not verified since
+ * 21 Sep" is the case someone needs to act on, and it is the one the old chip
+ * hid completely.
+ */
+function wpuFreshness(assignments) {
+  if (!assignments.length) return "";
+  const at = wpuLastVerified(assignments);
+  if (!at) {
+    return ' <span class="wpu-fresh stale" title="Nobody has asked the website about this since it was set. Press Sync users.">never verified</span>';
+  }
+  const mins = Math.floor((Date.now() - new Date(at).getTime()) / 60000);
+  const stale = mins > 24 * 60;
+  const words = wpuAgo(at);
+  return stale
+    ? ` <span class="wpu-fresh stale" title="Last confirmed with the website ${esc(words)}">not verified since ${esc(words)}</span>`
+    : ` <span class="wpu-fresh" title="Last confirmed with the website ${esc(words)}">verified ${esc(words)}</span>`;
+}
+
 function wpuFilteredUsers() {
   const f = WPU.filters;
   const q = f.q.trim().toLowerCase();
@@ -424,13 +580,16 @@ function wpuRenderUsers() {
         return `<span class="wpu-chip ${ok ? "ok" : "none"}">${ok}/${mine.length} synced</span>` +
                (failed ? ` <span class="wpu-chip bad">${failed} failed</span>` : "") +
                (undelivered ? ` <span class="wpu-chip bad" title="The set-password email couldn't be delivered">${undelivered} not delivered</span>` : "") +
-               (waiting ? ` <span class="wpu-chip warn" title="Invited, but they haven't set a password yet">${waiting} waiting</span>` : "");
+               (waiting ? ` <span class="wpu-chip warn" title="Invited, but they haven't set a password yet">${waiting} waiting</span>` : "") +
+               wpuFreshness(mine);
       })()}</td>
       <td data-label="Status">
         ${u.status === "disabled" ? '<span class="wpu-chip disabled">Disabled</span>' : '<span class="wpu-chip">Active</span>'}
         ${u.domainOverride ? ' <span class="wpu-chip ext" title="Outside the agency domain">External</span>' : ""}
       </td>
       <td class="wpu-actions">
+        <button class="wpu-linkbtn" id="wpu-sync-${esc(u.id)}" onclick="wpuSyncPerson('${escJs(u.id)}')"
+          title="Ask the websites this person is on who is actually there. No monitoring checks.">Sync</button>
         <button class="wpu-linkbtn" onclick="wpuStartAssign({ staffIds: ['${escJs(u.id)}'] })">Websites…</button>
         <button class="wpu-linkbtn" onclick="wpuOpenInvites('${escJs(u.id)}')">Invitations…</button>
         <button class="wpu-linkbtn" onclick="wpuEditUser('${escJs(u.id)}')">Edit</button>
@@ -470,14 +629,22 @@ function wpuRenderUsers() {
         <option value="none"${f.sync === "none" ? " selected" : ""}>No websites yet</option>
       </select>
       ${Object.values(f).some(Boolean) ? '<button class="wpu-linkbtn" onclick="wpuClearFilters()">Clear</button>' : ""}
+      <button class="btn" id="wpuSyncAllBtn" onclick="wpuSyncAll()"
+        title="Ask every connected website who is actually on it. Does not run uptime, SSL, PageSpeed or plugin checks.">Sync users</button>
       <button class="btn" onclick="wpuAssignFromToolbar()">Add to websites…</button>
       <button class="btn primary" onclick="wpuEditUser()">${ICON.plus} Add person</button>
+    </div>
+    <div class="wpu-note" style="margin:-6px 0 12px" id="wpuSyncNote">
+      <strong>Sync users</strong> asks the websites who is on them — accounts, roles and invitations only.
+      <strong>Run checks</strong>, at the top of the dashboard, is the monitoring sweep: uptime, SSL,
+      PageSpeed, plugin versions. Use Sync users for “has this person been removed?”.
     </div>
 
     <div class="wpu-selbar${WPU.selected.size ? " show" : ""}">
       <span class="count">${WPU.selected.size} selected</span>
       <select id="wpu-bulk-team">${wpuTeamOptions("", { noneLabel: "No team" })}</select>
       <button class="btn" onclick="wpuBulkMove()">Move to team</button>
+      <button class="btn" id="wpuSyncSelBtn" onclick="wpuSyncSelected()">Sync selected</button>
       <button class="btn primary" onclick="wpuStartAssign({ staffIds: [...WPU.selected] })">Add to websites…</button>
       <button class="wpu-linkbtn" onclick="wpuClearSelection()">Clear</button>
       <span class="wpu-msg" id="wpuBulkMsg"></span>
@@ -747,7 +914,10 @@ async function wpuRenderWebsites(force) {
       <td data-label="Checked" class="wpu-audit-when">${esc(w.checkedAt ? wpuWhen(w.checkedAt) : "—")}</td>
       <td class="wpu-actions">
         ${w.enrolled
-          ? `<button class="wpu-linkbtn" onclick="wpuRotateCredential('${escJs(w.websiteId)}')">Rotate</button>
+          ? `<button class="wpu-linkbtn" id="wpu-sync-site-${esc(w.websiteId)}"
+                     onclick="wpuSyncSite('${escJs(w.websiteId)}')"
+                     title="Ask this website who is on it. Doesn't touch its credential.">Sync users</button>
+             <button class="wpu-linkbtn" onclick="wpuRotateCredential('${escJs(w.websiteId)}')">Rotate</button>
              <button class="wpu-linkbtn danger" onclick="wpuRevokeCredential('${escJs(w.websiteId)}')">Disconnect</button>`
           : `<button class="wpu-linkbtn" onclick="wpuIssueCode('${escJs(w.websiteId)}')">Connect…</button>`}
       </td>
@@ -761,7 +931,15 @@ async function wpuRenderWebsites(force) {
         code, pasted into that site’s <strong>DE Monitoring</strong> panel by someone with
         access to its admin — user management can’t be switched on remotely.
       </div>
-      <button class="btn" onclick="wpuRenderWebsites(true)">Re-check all</button>
+      <button class="btn" id="wpuSyncAllBtn" onclick="wpuSyncAll()"
+        title="Ask every connected website who is actually on it. No monitoring checks.">Sync users</button>
+      <button class="btn" onclick="wpuRenderWebsites(true)"
+        title="Re-probe each website's plugin: version, readiness and permissions.">Re-check connections</button>
+    </div>
+    <div class="wpu-note" style="margin:-6px 0 12px" id="wpuSyncNote">
+      <strong>Sync users</strong> asks who is on each website — accounts, roles and invitations.
+      <strong>Re-check connections</strong> re-probes each plugin’s version and permissions.
+      Neither runs the monitoring sweep; that is <strong>Run checks</strong> at the top of the dashboard.
     </div>
     ${Object.keys(counts).length ? `<div class="wpu-bar">${Object.entries(counts).map(([k, n]) => {
       const st = WPU_READINESS[k] || WPU_READINESS.unknown;
@@ -2007,7 +2185,15 @@ async function wpuRenderSync(force) {
         ${s.needsEnrollment ? `<span class="wpu-chip warn">${s.needsEnrollment} not connected</span>` : ""}
         ${s.unreachable ? `<span class="wpu-chip bad">${s.unreachable} unreachable</span>` : ""}
       </div>
-      <button class="btn" onclick="wpuRenderSync(true)">Re-check all</button>
+      <button class="btn" id="wpuSyncAllBtn" onclick="wpuSyncAll()"
+        title="Ask every connected website who is actually on it.">Sync users</button>
+      <button class="btn" onclick="wpuRenderSync(true)"
+        title="Re-probe each website's plugin version and readiness. Does not ask who is on them.">Re-check connections</button>
+    </div>
+    <div class="wpu-note" style="margin:-6px 0 12px" id="wpuSyncNote">
+      <strong>Re-check connections</strong> re-probes each plugin; it does not ask who is on each
+      site — which is why a count here can be right and stale at the same time. <strong>Sync
+      users</strong> is the one that asks.
     </div>
 
     ${(data.enrollmentFailures || []).length ? `<div class="wpu-warnbox">

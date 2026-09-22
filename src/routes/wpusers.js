@@ -23,7 +23,7 @@ import { getSiteRoles } from "../usermgmt/roles.js";
 import { runPreflight } from "../usermgmt/preflight.js";
 import { startAssignment, startRemoval, startDeletion, getJob, retryJob } from "../usermgmt/sync.js";
 import { getContentOwnership, reassignContent, planDeletion } from "../usermgmt/contentOwnership.js";
-import { reconcileAll, reconcileSite, driftSummary } from "../usermgmt/reconcile.js";
+import { reconcileAll, reconcileSite, reconcileStaff, driftSummary } from "../usermgmt/reconcile.js";
 import { resendInvite, getAssignment, inviteSummary, inviteLabel, noResendReason } from "../usermgmt/invites.js";
 import { getWebsites, getWebsiteSite, query } from "../db.js";
 
@@ -663,10 +663,105 @@ router.get("/audit", asyncRoute(async (req, res) => {
  * filter and summarise by website and sync state, and doing that per row would
  * mean N requests to render one screen.
  */
+/* ===================================================== syncing users ====== */
+
+/**
+ * Asking websites who is actually on them — and nothing else.
+ *
+ * SEPARATE FROM "RUN CHECKS" ON PURPOSE. That button runs the monitoring sweep:
+ * uptime, SSL, Cloudflare, tags, PageSpeed, updates, security scan across every
+ * site. It reconciles users too, as a passenger, which made it the only
+ * reliable way to answer "has this person been removed?" — at a cost out of all
+ * proportion to the question.
+ *
+ * These three routes are the same reconciliation at three widths: one person,
+ * one site, everyone. They share ONE path — reconcileSite/reconcileAll, the
+ * same one the sweep and Re-check all already use — because a second
+ * implementation of "who is on this site" is how two screens start disagreeing.
+ *
+ * READ-ONLY TOWARD WORDPRESS. The only outbound call is GET /users/lookup.
+ * Nothing here creates, deletes or re-roles anyone; reconciliation writes hub
+ * rows and audit entries and stops there.
+ *
+ * Readiness comes from the CACHED capability answer. Forcing a fresh probe per
+ * site would put back a chunk of the cost this exists to avoid, and a site that
+ * has gone unreachable since the last probe simply fails its lookups and is
+ * counted as skipped — which is the correct answer either way.
+ */
+async function readySites(force = false) {
+  const sites = await getWebsites();
+  const caps = await getCapabilitiesForAll(sites, { force });
+  const ready = new Set(caps.filter((c) => c.readiness === READINESS.READY).map((c) => c.websiteId));
+  return { sites, ready, caps };
+}
+
+/** Everyone, or just the people named. The button people will actually use. */
+router.post("/sync-users", asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  const staffUserIds = Array.isArray(b.staffUserIds) ? b.staffUserIds.filter(Boolean) : [];
+  try {
+    const { sites, ready } = await readySites();
+    const actor = { actorUserId: req.user?.id, actorEmail: req.user?.email, via: "sync-users" };
+    const isReady = (site) => ready.has(site.id);
+
+    const reconciled = staffUserIds.length
+      ? await reconcileStaff(staffUserIds, sites, { actor, isReady })
+      : await reconcileAll(sites, { actor, isReady });
+
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "wpusers.sync_users", entityType: "sync", entityId: null,
+      after: { scope: staffUserIds.length ? "selected" : "all",
+               people: staffUserIds.length || null, sites: reconciled.perSite.length,
+               totals: reconciled.totals },
+    });
+    res.json({ ok: true, reconciled, syncedAt: new Date().toISOString() });
+  } catch (err) { return fail(res, err); }
+}));
+
+/** One website's assignments. Does NOT touch the site's credential. */
+router.post("/websites/:id/sync-users", asyncRoute(async (req, res) => {
+  try {
+    const site = await getWebsiteSite(req.params.id);
+    if (!site) return res.status(404).json({ ok: false, error: "That website no longer exists." });
+
+    const caps = await getCapabilities(site, { force: false });
+    if (caps.readiness !== READINESS.READY) {
+      return res.json({ ok: false, code: caps.readiness, error: caps.message });
+    }
+    const reconciled = await reconcileSite(site, {
+      actor: { actorUserId: req.user?.id, actorEmail: req.user?.email, via: "sync-users" },
+    });
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "wpusers.sync_users", entityType: "website", entityId: site.id, websiteId: site.id,
+      after: { scope: "site", totals: reconciled },
+    });
+    res.json({ ok: true, reconciled, syncedAt: new Date().toISOString() });
+  } catch (err) { return fail(res, err); }
+}));
+
+/** One person, everywhere they are assigned. */
+router.post("/users/:id/sync", asyncRoute(async (req, res) => {
+  try {
+    const { sites, ready } = await readySites();
+    const reconciled = await reconcileStaff([req.params.id], sites, {
+      actor: { actorUserId: req.user?.id, actorEmail: req.user?.email, via: "sync-users" },
+      isReady: (site) => ready.has(site.id),
+    });
+    await audit.record({
+      ...audit.actorFrom(req),
+      action: "wpusers.sync_users", entityType: "staff_user", entityId: req.params.id,
+      after: { scope: "person", sites: reconciled.perSite.length, totals: reconciled.totals },
+    });
+    res.json({ ok: true, reconciled, syncedAt: new Date().toISOString() });
+  } catch (err) { return fail(res, err); }
+}));
+
 router.get("/assignments", asyncRoute(async (req, res) => {
   const { rows } = await query(
     `select a.staff_user_id, a.website_id, a.wp_role, a.state, a.managed,
-            a.last_error_code, a.last_synced_at, w.name as website_name,
+            a.last_error_code, a.last_synced_at, a.last_reconciled_at, w.name as website_name,
             a.invite_state, a.invited_at, a.password_set_at, a.activation_signal,
             a.invite_count, a.drift
        from website_user_assignments a
@@ -684,6 +779,11 @@ router.get("/assignments", asyncRoute(async (req, res) => {
       managed: r.managed,
       errorCode: r.last_error_code,
       lastSyncedAt: r.last_synced_at,
+      // When we last ASKED the website, as opposed to when we last changed
+      // something. A row nobody has verified in a fortnight and one confirmed a
+      // minute ago are otherwise indistinguishable, which is the whole
+      // complaint: the number looked equally confident either way.
+      lastReconciledAt: r.last_reconciled_at,
       drift: r.drift,
       invite: {
         state: r.invite_state,
