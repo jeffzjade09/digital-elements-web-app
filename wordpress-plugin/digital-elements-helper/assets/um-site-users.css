@@ -192,6 +192,8 @@
   border-bottom: 1px dotted #c3c4c7;
   cursor: help;
 }
+/* It is reachable by keyboard, so it has to be visible when reached. */
+.deheled-tm-why:focus-visible { outline: 2px solid #2271b1; outline-offset: 2px; }
 
 /* --------------------------------------------------------------- badges */
 
@@ -267,7 +269,6 @@
 }
 .deheled-tm-stickybar .deheled-tm-spacer { flex: 1 1 auto; }
 .deheled-tm-stickybar-count { font-weight: 600; font-size: 13px; color: #1d2327; }
-.deheled-tm-stickybar-hint { color: #646970; font-size: 13px; }
 
 /* Hidden by attribute rather than a class, so it is out of the accessibility
    tree entirely when there is no selection to act on. */

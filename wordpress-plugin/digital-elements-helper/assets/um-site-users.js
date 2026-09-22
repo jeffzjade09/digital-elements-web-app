@@ -227,7 +227,9 @@
       + '  <div id="deheled-tm-others"></div>'
       + '  <div class="deheled-tm-stickybar" id="deheled-tm-sticky" hidden>'
       + '    <span class="deheled-tm-stickybar-count" id="deheled-tm-sticky-count">0 members selected</span>'
-      + '    <span class="deheled-tm-stickybar-hint">Select one or more team members to review and continue.</span>'
+      // No "select someone to continue" hint: the bar only exists once someone
+      // has been selected, so the hint would only ever contradict the count
+      // sitting next to it.
       + '    <span class="deheled-tm-spacer"></span>'
       + '    <button type="button" class="button" id="deheled-tm-clear">Clear selection</button>'
       + '    <button type="button" class="button button-primary" id="deheled-tm-review-sticky">Review selected</button>'
