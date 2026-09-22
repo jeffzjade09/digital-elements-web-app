@@ -1,5 +1,32 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.7.5 — You can see what's happening
+
+Nothing about who can use Team Members, what it does, or what it sends has
+changed.
+
+### While something is running
+
+- **A banner, where you're looking.** It names what is happening — adding
+  users, updating roles, synchronising with the web app — instead of a small
+  line at the top of the page that was easy to miss.
+- **Counted progress** where there is something to count: "Processing 2 of 5".
+- **One thing at a time.** Controls that would start a conflicting operation
+  switch off while one runs, and come back whether it succeeds or fails. A
+  second click can no longer start a second job.
+- **It always comes back.** If something takes too long, the page unlocks
+  itself and offers to try again rather than sitting there disabled. A job that
+  keeps reporting progress is left alone; only a silent one is given up on.
+- **Run in background still works.** The banner never blocks WordPress's own
+  menus, and you can always leave the screen.
+
+### Fixed
+
+- The Results screen showed an empty, unlabelled box next to **Run in
+  background**. It was the Retry button, hidden but still being drawn because
+  of a WordPress style rule. It is properly hidden now, and appears — with
+  its label — only when there is something to retry.
+
 ## 2.7.4 — A Team Members page you can actually work in
 
 Nothing about who can use this screen, what it does, or what it sends has
