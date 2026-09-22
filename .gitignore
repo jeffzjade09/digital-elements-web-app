@@ -4,3 +4,4 @@ config/sites.json
 # Runtime/generated state — never commit (regenerated per environment):
 data/*.json
 .claude/
+reports/
