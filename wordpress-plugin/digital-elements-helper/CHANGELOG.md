@@ -1,5 +1,46 @@
 # Changelog — Digital Elements Helper Plugin
 
+## 2.7.4 — A Team Members page you can actually work in
+
+Nothing about who can use this screen, what it does, or what it sends has
+changed. This is the screen itself.
+
+### What you'll see
+
+- **Four counts at the top** — teams, members, how many are already on this
+  website, and how many you've selected — read from the roster in front of you.
+- **Search and a team filter.** Both work on the list already loaded, so they
+  answer as you type and never go back to the dashboard for it. **Refresh** is
+  still the only thing that re-reads the roster.
+- **Teams as cards**, two across on a wide screen and one on a narrow one, each
+  one collapsible. Which ones you collapse is remembered for this website, so
+  the page comes back the way you left it.
+- **One line per person**, with their initials, their role, and a single badge
+  saying where they stand: already here, active, invitation pending, not
+  invited by us, or failed. Every badge says it in words, not just colour.
+- **A bar along the bottom** once you've selected someone, with the count, a way
+  to clear the selection, and Review. It stays out of the way until there is
+  something to do with it, and the page doesn't jump when it appears.
+
+**Select all** on a team picks only the people it can actually add — never
+someone already on this website, and never someone the current search has
+hidden.
+
+### Fixed along the way
+
+- Typing in a search box no longer would have cost you your place: the page
+  updates the rows that are already there instead of rebuilding itself, so
+  focus and the cursor stay put.
+- A colleague who is on two teams now behaves correctly on both rows.
+- If a refresh fails, the roster you already had stays on screen with a **Try
+  again** button, instead of the screen emptying.
+
+### Unchanged
+
+Every check that decides whether you can see or use this screen, and everything
+the plugin tells the dashboard about who is on this website. Accounts are still
+created only by Digital Elements, and no password is ever shown or sent here.
+
 ## 2.7.3 — Invitations you can see
 
 When Digital Elements adds a colleague to your website, WordPress emails them a
