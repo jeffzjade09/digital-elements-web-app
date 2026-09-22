@@ -150,3 +150,8 @@
 .wpu-outcome.ok strong { color: var(--ok); }
 .wpu-outcome.partial strong { color: var(--warn); }
 .wpu-outcome.failed strong { color: var(--fail); }
+
+/* When we last ASKED, beside what we last knew. A count nobody has verified
+   and one just confirmed must not look equally confident. */
+.wpu-fresh { font-size: 11px; color: var(--muted, #8b8f98); white-space: nowrap; margin-left: 2px; }
+.wpu-fresh.stale { color: var(--warn); }

@@ -236,7 +236,7 @@ app.get("/websites/:id", requireAuth, sendDashboard);
 function assetVersion() {
   try {
     const h = crypto.createHash("sha1");
-    for (const f of ["wpusers.js", "wpusers.css"]) h.update(fs.readFileSync(path.join(PUBLIC, f)));
+    for (const f of ["wpusers.js", "wpusers.css", "opguard.js"]) h.update(fs.readFileSync(path.join(PUBLIC, f)));
     return h.digest("hex").slice(0, 10);
   } catch {
     // Never let a missing file stop the dashboard booting; fall back to a
@@ -281,6 +281,7 @@ function sendAsset(name, type) {
     res.sendFile(path.join(PUBLIC, name));
   };
 }
+app.get("/opguard.js", requireAuth, sendAsset("opguard.js", "application/javascript"));
 app.get("/wpusers.js", requireAuth, sendAsset("wpusers.js", "application/javascript"));
 app.get("/wpusers.css", requireAuth, sendAsset("wpusers.css", "text/css"));
 

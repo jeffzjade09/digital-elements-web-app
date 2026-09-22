@@ -41,9 +41,17 @@ export const RECONCILE_ACTIONS = Object.freeze({
 });
 
 const CONCURRENCY = Math.max(1, Math.min(16, Number(process.env.USER_SYNC_CONCURRENCY) || 4));
+// How many SITES at once. Deliberately smaller than the within-site figure:
+// this multiplies with it, and 4 × 4 is already sixteen conversations from one
+// button. Each site polices its own rate limit; this keeps us well under it.
+const SITE_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.USER_SYNC_SITE_CONCURRENCY) || 3));
 
 /** The rows we hold for a site, with the person attached. */
-async function assignmentsFor(websiteId) {
+async function assignmentsFor(websiteId, { staffUserIds = null } = {}) {
+  // The staff filter is what makes "sync this one person" possible without a
+  // second reconcile path: same rows, same decisions, same writes — fewer of
+  // them. An empty array would mean "nobody", so only a non-empty list narrows.
+  const narrowed = Array.isArray(staffUserIds) && staffUserIds.length > 0;
   const { rows } = await query(
     `select a.id, a.staff_user_id, a.website_id, a.wp_role, a.wp_user_id, a.wp_user_login,
             a.state, a.managed, a.drift, a.last_reconciled_at,
@@ -52,8 +60,9 @@ async function assignmentsFor(websiteId) {
        from website_user_assignments a
        join staff_users s on s.id = a.staff_user_id
       where a.website_id = $1
-        and a.state <> 'removed'`,
-    [websiteId]
+        and a.state <> 'removed'
+        ${narrowed ? "and a.staff_user_id = any($2)" : ""}`,
+    narrowed ? [websiteId, staffUserIds] : [websiteId]
   );
   return rows;
 }
@@ -285,9 +294,25 @@ function tally(summary, decision) {
  * assigned person — /users/lookup takes a single address, so there is no batch
  * to use — under the same concurrency bound as a sync.
  */
-export async function reconcileSite(site, { actor = {}, credential = null } = {}) {
+/**
+ * `deps` is a test seam and nothing else.
+ *
+ * What this function must NOT do — call a site with anything but a lookup,
+ * write to WordPress, or read an unreachable site as an empty one — cannot be
+ * asserted from outside without being able to watch the calls it makes. The
+ * defaults are the real implementations; production never passes this.
+ */
+export async function reconcileSite(site, {
+  actor = {}, credential = null, staffUserIds = null, deps = null,
+} = {}) {
+  const d = deps || {};
+  const call = d.callSite || callSite;
+  const loadAssignments = d.assignmentsFor || assignmentsFor;
+  const write = d.apply || apply;
+  const writeInvite = d.applyInvite || applyInvite;
+
   const summary = summarize();
-  const assignments = await assignmentsFor(site.id);
+  const assignments = await loadAssignments(site.id, { staffUserIds });
   if (!assignments.length) return summary;
 
   let cursor = 0;
@@ -296,7 +321,7 @@ export async function reconcileSite(site, { actor = {}, credential = null } = {}
       const assignment = assignments[cursor++];
       let observation = null;
       try {
-        const res = await callSite(site, {
+        const res = await call(site, {
           method: "GET",
           route: "/users/lookup",
           query: { email: assignment.email },
@@ -325,8 +350,8 @@ export async function reconcileSite(site, { actor = {}, credential = null } = {}
       summary.checked++;
       const decision = decide(assignment, observation);
       if (!decision) { summary.skipped++; continue; }
-      await apply(site, assignment, decision, { ...actor, via: actor.via || "recheck" });
-      await applyInvite(assignment, observation);
+      await write(site, assignment, decision, { ...actor, via: actor.via || "recheck" });
+      await writeInvite(assignment, observation);
       tally(summary, decision);
     }
   };
@@ -342,23 +367,66 @@ export async function reconcileSite(site, { actor = {}, credential = null } = {}
  * stops the rest: a site being unreachable is the normal case this has to
  * survive, not an exception.
  */
-export async function reconcileAll(sites, { actor = {}, isReady = () => true } = {}) {
+export async function reconcileAll(sites, {
+  actor = {}, isReady = () => true, staffUserIds = null, concurrency = SITE_CONCURRENCY, deps = null,
+} = {}) {
   const totals = summarize();
   const perSite = [];
 
-  for (const site of sites) {
-    if (site.archived) continue;
-    if (!isReady(site)) continue;
-    try {
-      const summary = await reconcileSite(site, { actor });
-      perSite.push({ websiteId: site.id, name: site.name, ...summary });
-      for (const k of Object.keys(totals)) totals[k] += summary[k];
-    } catch (err) {
-      console.error(`[reconcile] ${site.name}: ${err.message}`);
-      perSite.push({ websiteId: site.id, name: site.name, error: err.message });
+  const queue = sites.filter((site) => !site.archived && isReady(site));
+  if (!queue.length) return { totals, perSite };
+
+  // Bounded across sites as well as within one. Each site is a different host
+  // with its own rate limit, so a few in parallel is politeness-neutral — but
+  // unbounded would mean forty simultaneous outbound conversations from one
+  // click, which is its own kind of rude.
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < queue.length) {
+      const site = queue[cursor++];
+      try {
+        const summary = await reconcileSite(site, { actor, staffUserIds, deps });
+        perSite.push({ websiteId: site.id, name: site.name, ...summary });
+        for (const k of Object.keys(totals)) totals[k] += summary[k];
+      } catch (err) {
+        // One site's failure never stops the rest: a site being unreachable is
+        // the normal case this has to survive, not an exception.
+        console.error(`[reconcile] ${site.name}: ${err.message}`);
+        perSite.push({ websiteId: site.id, name: site.name, error: err.message });
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+
   return { totals, perSite };
+}
+
+/**
+ * Everywhere one person is assigned, and nowhere else.
+ *
+ * The narrow end of the same path: identical decisions and identical writes,
+ * over that person's rows only. Sites they aren't on are skipped before any
+ * request is made, so syncing one colleague costs one lookup per website they
+ * are actually on rather than one per assignment in the estate.
+ */
+export async function reconcileStaff(staffUserIds, sites, { actor = {}, isReady = () => true, deps = null } = {}) {
+  const ids = (Array.isArray(staffUserIds) ? staffUserIds : [staffUserIds]).filter(Boolean);
+  if (!ids.length) return { totals: summarize(), perSite: [] };
+
+  const { rows } = await query(
+    `select distinct website_id from website_user_assignments
+      where staff_user_id = any($1) and state <> 'removed'`,
+    [ids]
+  );
+  const wanted = new Set(rows.map((r) => r.website_id));
+  if (!wanted.size) return { totals: summarize(), perSite: [] };
+
+  return reconcileAll(sites, {
+    actor,
+    staffUserIds: ids,
+    deps,
+    isReady: (site) => wanted.has(site.id) && isReady(site),
+  });
 }
 
 /** Drift counts per site, for Sync status. */
