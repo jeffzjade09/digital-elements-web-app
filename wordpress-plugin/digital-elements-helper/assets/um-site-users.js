@@ -52,6 +52,17 @@
   var ui = {};             // cached nodes for the panel shell
   var rows = [];           // one entry per rendered member row
 
+  /* One operation at a time, with a watchdog that always brings the controls
+   * back. The decisions live in um-progress.js so the test suite can exercise
+   * them without a DOM; everything here is the DOM half. */
+  var guard = (global_progress() || {}).createGuard
+    ? global_progress().createGuard()
+    : null;
+
+  function global_progress() {
+    return typeof window !== 'undefined' ? window.DEHELED_TM_PROGRESS : null;
+  }
+
   function esc(s) {
     return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -197,6 +208,7 @@
     root.innerHTML = ''
       + '<div class="deheled-tm-panel">'
       + '  <div id="deheled-tm-msg" class="deheled-tm-msg" role="status" aria-live="polite"></div>'
+      + progressBanner()
       + '  <div id="deheled-tm-notice" class="deheled-tm-notice" hidden>'
       + '    <span id="deheled-tm-notice-text"></span>'
       + '    <button type="button" class="button" id="deheled-tm-retry">Try again</button>'
@@ -237,6 +249,12 @@
       + '</div>';
 
     ui = {
+      panel:      root.querySelector('.deheled-tm-panel'),
+      progress:       document.getElementById('deheled-tm-progress'),
+      progressText:   document.getElementById('deheled-tm-progress-text'),
+      progressDetail: document.getElementById('deheled-tm-progress-detail'),
+      progressTrack:  document.getElementById('deheled-tm-progress-track'),
+      progressFill:   document.getElementById('deheled-tm-progress-fill'),
       msg:        document.getElementById('deheled-tm-msg'),
       notice:     document.getElementById('deheled-tm-notice'),
       noticeText: document.getElementById('deheled-tm-notice-text'),
@@ -288,6 +306,131 @@
     // all. Re-drawing the cards after a refresh cannot detach it.
     ui.teams.addEventListener('change', onTeamsChange);
     ui.teams.addEventListener('click', onTeamsClick);
+
+    wireGuard();
+  }
+
+  /* Subscribed once per shell. Every ending — including the watchdog's —
+   * comes through here, so there is exactly one place that puts the controls
+   * back and exactly one that cannot be forgotten. */
+  var guardWired = false;
+  function wireGuard() {
+    if (!guard || guardWired) { if (guard) setBusy(guard.isRunning(), guard.current()); return; }
+    guardWired = true;
+    guard.on(function (e) {
+      if (e.type === 'begin') return;
+      setBusy(false);
+      if (e.type === 'timeout') {
+        // Never leave the screen blocked. The job may well still be running on
+        // the hub, so the wording says so rather than claiming it failed.
+        if (state.poll) { clearInterval(state.poll); state.poll = null; }
+        state.busy = false;
+        announce(DEHELED_TM.strings.timedOut, 'warn');
+        if (ui.notice && ui.noticeText) {
+          ui.noticeText.textContent = DEHELED_TM.strings.timedOut;
+          ui.notice.hidden = false;
+        }
+      }
+    });
+  }
+
+  /**
+   * The banner that says something is happening.
+   *
+   * role="status" + aria-live="polite" rather than an alert: it should be
+   * announced without interrupting, and it must never take focus — someone
+   * mid-way through the roster with a keyboard has to stay where they are.
+   */
+  function progressBanner() {
+    return '<div class="deheled-tm-progress" id="deheled-tm-progress" hidden'
+      + ' role="status" aria-live="polite">'
+      + '<span class="deheled-tm-spinner" aria-hidden="true"></span>'
+      + '<span class="deheled-tm-progress-text" id="deheled-tm-progress-text">Working</span>'
+      + '<span class="deheled-tm-progress-detail" id="deheled-tm-progress-detail"></span>'
+      + '<span class="deheled-tm-spacer"></span>'
+      + '<div class="deheled-tm-progress-track" id="deheled-tm-progress-track" hidden>'
+      + '<div class="deheled-tm-progress-fill" id="deheled-tm-progress-fill"></div>'
+      + '</div>'
+      + '</div>';
+  }
+
+  /** Every control that could start something that would conflict. */
+  function conflictingControls() {
+    return [ui.refresh, ui.reviewHead, ui.reviewBar, ui.reviewSticky, ui.clear,
+            ui.retry, ui.search, ui.teamPick, ui.rolePick]
+      .concat(Array.prototype.slice.call(
+        ui.teams ? ui.teams.querySelectorAll('input[type=checkbox], button') : []))
+      .filter(Boolean);
+  }
+
+  /**
+   * Switches the page between working and idle.
+   *
+   * MUTATES IN PLACE — sets .disabled and aria-disabled on controls that
+   * already exist. Rebuilding them to disable them is what drops listeners,
+   * which is the trap #24 was about; the same trap applies here.
+   */
+  function setBusy(on, kind) {
+    if (ui.panel) ui.panel.setAttribute('aria-busy', on ? 'true' : 'false');
+
+    conflictingControls().forEach(function (el) {
+      // Remembered so re-enabling restores what was true before, rather than
+      // switching on a Review button that had nothing selected.
+      if (on) {
+        if (el.dataset && el.dataset.wasDisabled === undefined) {
+          el.dataset.wasDisabled = el.disabled ? '1' : '0';
+        }
+        el.disabled = true;
+        el.setAttribute('aria-disabled', 'true');
+      } else {
+        var was = el.dataset ? el.dataset.wasDisabled : undefined;
+        el.disabled = was === '1';
+        el.setAttribute('aria-disabled', was === '1' ? 'true' : 'false');
+        if (el.dataset) delete el.dataset.wasDisabled;
+      }
+    });
+
+    if (!ui.progress) return;
+    ui.progress.hidden = !on;
+    if (on) {
+      setText(ui.progressText, guard ? guard.label(kind) : 'Working');
+      setText(ui.progressDetail, '');
+      if (ui.progressTrack) ui.progressTrack.hidden = true;
+    }
+  }
+
+  /** "Processing 2 of 5", only where operations exist to count. */
+  function showProgressCount(operations) {
+    if (!guard || !ui.progress || ui.progress.hidden) return;
+    var p = guard.progress(operations);
+    if (!p) return;
+    setText(ui.progressDetail, p.done >= p.total ? p.finishedText : p.text);
+    if (ui.progressTrack && ui.progressFill) {
+      ui.progressTrack.hidden = false;
+      ui.progressFill.style.width = Math.round((p.done / p.total) * 100) + '%';
+    }
+  }
+
+  /**
+   * Starts an operation, or refuses because one is already running.
+   *
+   * Returns false when it refused, and every caller treats that as "do
+   * nothing" — which is what stops a second click becoming a second request.
+   */
+  function beginOp(kind) {
+    if (!guard) return true;               // no guard loaded: behave as before
+    if (!guard.begin(kind)) {
+      announce(DEHELED_TM.strings.busy, 'warn');
+      return false;
+    }
+    setBusy(true, kind);
+    return true;
+  }
+
+  /** The single way out. Called on success, failure, refusal and timeout. */
+  function endOp(how) {
+    if (!guard) return;
+    if (how === 'fail') guard.fail(); else guard.succeed();
   }
 
   function statTile(key, label) {
@@ -638,15 +781,16 @@
   function onResend(button) {
     var id = button.getAttribute('data-resend');
     if (!id) return;
-    button.disabled = true;
+    if (!beginOp('resend')) return;
     button.textContent = 'Sending…';
     announce('Sending…');
     post('deheled_tm_resend', { staffId: id }, function (err, data) {
       if (err) {
-        button.disabled = false;
+        endOp('fail');
         button.textContent = 'Resend invitation';
         return announce(err.message || DEHELED_TM.strings.genericError, 'warn');
       }
+      endOp('ok');
       // Re-read rather than assume: whether the email actually went out is the
       // whole question, and only the website can answer it.
       announce(data.message || 'Sent.', data.delivered ? 'ok' : 'warn');
@@ -657,11 +801,11 @@
   /* ================================================================ roster = */
 
   function loadRoster(refresh) {
+    if (!beginOp(refresh ? 'refresh' : 'roster')) return;
     announce(refresh ? DEHELED_TM.strings.refreshing : DEHELED_TM.strings.loading);
-    if (ui.refresh) ui.refresh.disabled = true;
 
     post('deheled_tm_roster', { refresh: refresh ? 1 : '' }, function (err, data) {
-      if (ui.refresh) ui.refresh.disabled = false;
+      endOp(err ? 'fail' : 'ok');
 
       if (err) {
         // A VERDICT FROM THE GATE is not a failed request: the licence expired,
@@ -722,10 +866,12 @@
   function doPreflight() {
     var ids = selectedIds();
     if (!ids.length) return;
+    if (!beginOp('preflight')) return;
     announce('Checking what would happen…');
     post('deheled_tm_preflight', { ids: ids, role: state.role }, function (err, data) {
-      if (err) return announce(err.message || DEHELED_TM.strings.genericError, 'bad');
+      if (err) { endOp('fail'); return announce(err.message || DEHELED_TM.strings.genericError, 'bad'); }
       state.preflight = data;
+      endOp('ok');
       renderReview();
     });
   }
@@ -800,6 +946,10 @@
 
   function doAssign(confirmAdmin) {
     if (state.busy) return;
+    // The guard covers the whole assign → poll → results sequence, not just
+    // the first request: it settles when the job reports done, when it fails,
+    // or when the watchdog gives up on it.
+    if (!beginOp('assign')) return;
     state.busy = true;
     // Generated ONCE per submission. Retry reuses it, which is what makes a
     // retry safe — the hub returns the same job instead of adding everyone
@@ -812,7 +962,7 @@
       requestId: state.requestId, confirmAdmin: confirmAdmin ? 1 : '',
     }, function (err, data) {
       state.busy = false;
-      if (err) return announce(err.message || DEHELED_TM.strings.genericError, 'bad');
+      if (err) { endOp('fail'); return announce(err.message || DEHELED_TM.strings.genericError, 'bad'); }
       state.jobId = data.jobId;
       buildResultsShell();
       pollJob();
@@ -832,10 +982,18 @@
       post('deheled_tm_job', { jobId: state.jobId }, function (err, data) {
         if (err) {
           if (state.poll) { clearInterval(state.poll); state.poll = null; }
+          endOp('fail');
           return announce(err.message || DEHELED_TM.strings.genericError, 'bad');
         }
+        // An answer is evidence the job is alive, so the watchdog starts again
+        // from here rather than cutting off a legitimately long run.
+        if (guard) guard.touch();
         updateResults(data.job);
-        if (data.job.done && state.poll) { clearInterval(state.poll); state.poll = null; }
+        showProgressCount(data.job.operations);
+        if (data.job.done) {
+          if (state.poll) { clearInterval(state.poll); state.poll = null; }
+          endOp('ok');
+        }
       });
     };
     tick();
@@ -852,7 +1010,9 @@
    */
   function buildResultsShell() {
     root.innerHTML = ''
+      + '<div class="deheled-tm-panel">'
       + '<h2 class="deheled-tm-h2">Results</h2>'
+      + progressBanner()
       + '<div id="deheled-tm-res-warn"></div>'
       + '<table class="widefat deheled-tm-table"><thead><tr>'
       + '<th>Person</th><th>Role</th><th>Result</th></tr></thead>'
@@ -860,7 +1020,21 @@
       + '<div id="deheled-tm-msg" class="deheled-tm-msg" role="status" aria-live="polite"></div>'
       + '<p class="deheled-tm-actions">'
       + '<button type="button" class="button" id="deheled-tm-retry-failed" hidden></button> '
-      + '<button type="button" class="button button-primary" id="deheled-tm-done">Run in background</button></p>';
+      + '<button type="button" class="button button-primary" id="deheled-tm-done">Run in background</button></p>'
+      + '</div>';
+
+    // The panel's nodes are gone with the shell, so the ones setBusy and the
+    // progress banner use are re-cached here. The guard's subscription is not
+    // re-made — it is on the guard, not on the document.
+    ui.panel          = root.querySelector('.deheled-tm-panel');
+    ui.progress       = document.getElementById('deheled-tm-progress');
+    ui.progressText   = document.getElementById('deheled-tm-progress-text');
+    ui.progressDetail = document.getElementById('deheled-tm-progress-detail');
+    ui.progressTrack  = document.getElementById('deheled-tm-progress-track');
+    ui.progressFill   = document.getElementById('deheled-tm-progress-fill');
+    ui.teams = null;
+    ui.refresh = ui.reviewHead = ui.reviewBar = ui.reviewSticky = null;
+    ui.clear = ui.retry = ui.search = ui.teamPick = ui.rolePick = null;
 
     ui.msg = document.getElementById('deheled-tm-msg');
     ui.resWarn = document.getElementById('deheled-tm-res-warn');
@@ -868,6 +1042,11 @@
     ui.retryFailed = document.getElementById('deheled-tm-retry-failed');
     ui.done = document.getElementById('deheled-tm-done');
     if (headerActions) headerActions.innerHTML = '';
+
+    // Deliberately NOT in conflictingControls: "Run in background" has to stay
+    // clickable while the job runs — that is the whole point of it — and the
+    // watchdog must not be able to trap someone on this screen.
+    if (guard && guard.isRunning()) setBusy(true, guard.current());
 
     // Same request id, so the hub replays rather than repeating.
     ui.retryFailed.addEventListener('click', function () { doAssign(false); });

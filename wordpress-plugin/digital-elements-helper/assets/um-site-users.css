@@ -27,6 +27,20 @@
 /* A disabled primary still has to read as the primary action, just unavailable. */
 .deheled-tm [aria-disabled="true"] { opacity: .55; cursor: default; pointer-events: none; }
 
+/* DO NOT "CLEAN UP" THE !important HERE.
+ *
+ * The hidden attribute's display:none comes from the browser's own stylesheet,
+ * and an AUTHOR rule beats a UA rule whatever the specificity. WordPress ships
+ * one in wp-includes/css/buttons.css:
+ *
+ *     .wp-core-ui .button, .wp-core-ui .button-primary { display: inline-block; }
+ *
+ * and every admin page carries wp-core-ui on the body. So a hidden .button is
+ * still displayed — which is how a hidden, text-less Retry button rendered as
+ * an empty bordered box beside "Run in background" and read as a stray
+ * checkbox. This is scoped to our own page and defeats exactly that rule. */
+.deheled-tm [hidden] { display: none !important; }
+
 /* ----------------------------------------------------------------- summary */
 
 .deheled-tm-summary {
@@ -327,3 +341,51 @@
   .deheled-tm-toggle .deheled-tm-caret,
   .deheled-tm-stickybar { transition: none; }
 }
+
+/* ------------------------------------------------------------ progress ---- */
+
+/* A banner, not an overlay: WordPress's own admin navigation has to stay
+   usable while a job runs, and a job can legitimately be left running. It sits
+   directly above the content it describes rather than as a line at the top of
+   the page, which is where it was being missed. */
+.deheled-tm-progress {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #fff;
+  border: 1px solid #dcdcde;
+  border-left: 4px solid #2271b1;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 0 0 14px;
+}
+.deheled-tm-progress[hidden] { display: none !important; }
+.deheled-tm-progress-text { font-weight: 600; font-size: 13px; color: #1d2327; }
+.deheled-tm-progress-detail { font-size: 13px; color: #646970; }
+.deheled-tm-progress .deheled-tm-spacer { flex: 1 1 auto; }
+
+/* A determinate bar when there are operations to count, hidden when there
+   is nothing honest to show. */
+.deheled-tm-progress-track {
+  flex: 1 1 100%;
+  height: 4px; border-radius: 2px; background: #f0f0f1; overflow: hidden;
+}
+.deheled-tm-progress-track[hidden] { display: none !important; }
+.deheled-tm-progress-fill {
+  height: 100%; background: #2271b1; width: 0;
+  transition: width .2s ease;
+}
+
+/* The spinner is decoration; the words carry the meaning. */
+.deheled-tm-spinner {
+  width: 16px; height: 16px; flex-shrink: 0;
+  border: 2px solid #dcdcde; border-top-color: #2271b1; border-radius: 50%;
+  animation: deheled-tm-spin .8s linear infinite;
+}
+@keyframes deheled-tm-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .deheled-tm-spinner { animation: none; }
+  .deheled-tm-progress-fill { transition: none; }
+}
+
+/* Anything the guard has switched off while an operation runs. */
+.deheled-tm [aria-busy="true"] { cursor: progress; }
