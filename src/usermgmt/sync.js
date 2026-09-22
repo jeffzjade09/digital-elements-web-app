@@ -652,13 +652,44 @@ async function runDeletions(jobId, ops, actor) {
         const result = await deleteOnSite(op.staff.id, op.site.id, {
           reassignTarget: op.reassignTarget, idempotencyKey: key,
         });
-        await finishOperation(id, { status: "removed", result: result.result || result, attempt: 1 });
+        // 'deleted', not 'removed'. They used to share a word, and the word
+        // they shared was the unlink one, so a deletion reported itself as
+        // "No longer managed". See migration 010.
+        //
+        // Both halves have to have happened to say this: the site deleted the
+        // account AND deleteOnSite() wrote the assignment row. If the row write
+        // throws, we land in the catch below as a partial rather than claiming
+        // a clean deletion.
+        await finishOperation(id, {
+          status: "deleted",
+          result: result.result || result,
+          warnings: result.hubSynced === false
+            ? [{ code: "hub_sync_failed",
+                 message: "Deleted in WordPress, but the web app couldn't record it. Re-check this website to reconcile." }]
+            : undefined,
+          attempt: 1,
+        });
         await audit.record({
           ...actor, action: "wpuser.delete", entityType: "staff_user", entityId: op.staff.id,
           websiteId: op.site.id, targetEmail: op.staff.email,
           before, after: { deleted: true, reassignedTo: op.reassignTarget || null }, result: "ok",
         });
       } catch (err) {
+        // Refusing an account we don't manage is the guard working, not a
+        // failure of this job. It reads as one if it is filed under 'failed',
+        // and someone then goes looking for a fault that isn't there.
+        if (err.code === "not_managed") {
+          await finishOperation(id, {
+            status: "skipped", errorCode: "not_managed",
+            result: { reason: "not managed by Digital Elements" }, attempt: 0,
+          });
+          await audit.record({
+            ...actor, action: "wpuser.delete", entityType: "staff_user", entityId: op.staff.id,
+            websiteId: op.site.id, targetEmail: op.staff.email,
+            after: { refused: "not_managed" }, result: "refused",
+          });
+          continue;
+        }
         await finishOperation(id, {
           status: "failed", errorCode: err.code || "failed", error: err.message, attempt: 1,
         });
@@ -674,6 +705,59 @@ async function runDeletions(jobId, ops, actor) {
 }
 
 /* ---------------------------------------------------------- job reading --- */
+
+/**
+ * What actually happened, in the words of the thing that happened.
+ *
+ * A bare "1/1" tells whoever ran the job nothing about which of five quite
+ * different endings they got, and the counts alone cannot distinguish them:
+ * a deletion and an unlink used to share a status, and a refusal to touch an
+ * account we do not manage looked identical to a fault.
+ *
+ * Pure, and exported, because these sentences are the part people read and the
+ * part worth pinning down in tests. `counts` is the status histogram from
+ * getJob(); `warnings` is how many operations came back deleted-but-unrecorded.
+ */
+export function describeOutcome({ counts = {}, warnings = 0, skippedNotManaged = 0 } = {}) {
+  const n = (k) => counts[k] || 0;
+  const deleted = n("deleted");
+  const removed = n("removed");
+  const created = n("synced") + n("linked") + n("updated");
+  const skipped = n("skipped");
+  const failed = n("failed") + n("interrupted");
+  const total = Object.values(counts).reduce((s, v) => s + v, 0);
+
+  const lines = [];
+  const people = (k) => `${k} ${k === 1 ? "person" : "people"}`;
+
+  // Stated first and separately: an account that is gone from WordPress while
+  // our row still says otherwise is the one ending someone has to act on.
+  const cleanlyDeleted = Math.max(0, deleted - warnings);
+  if (cleanlyDeleted) lines.push(`${cleanlyDeleted} of ${total} deleted and synchronised`);
+  if (warnings) {
+    lines.push(`${warnings} deleted in WordPress, web app sync failed — re-check the website to reconcile`);
+  }
+  if (removed) lines.push(`${removed} of ${total} removed from this website`);
+  if (created) lines.push(`${created} of ${total} added or updated`);
+
+  // Two quite different reasons share the 'skipped' status, and only one of
+  // them is the guard refusing. "Nothing to do" and "we will not touch that
+  // account" must not read as the same sentence.
+  const unmanaged = Math.min(skippedNotManaged, skipped);
+  const nothingToDo = Math.max(0, skipped - unmanaged);
+  if (unmanaged) lines.push(`${people(unmanaged)} skipped — not managed by Digital Elements`);
+  if (nothingToDo) lines.push(`${people(nothingToDo)} skipped — nothing to do`);
+
+  if (failed) lines.push(`${failed} of ${total} failed`);
+
+  if (!lines.length) lines.push(total ? `${total} with nothing to do` : "Nothing to do");
+
+  const state = failed === 0 && !warnings ? "ok"
+    : failed === total ? "failed"
+    : "partial";
+
+  return { state, total, lines, summary: lines.join(" · ") };
+}
 
 export async function getJob(jobId) {
   const { rows: jobs } = await query("select * from user_sync_jobs where id = $1", [jobId]);
@@ -697,10 +781,14 @@ export async function getJob(jobId) {
   const counts = {};
   for (const o of ops) counts[o.status] = (counts[o.status] || 0) + 1;
 
+  const warnings = ops.filter((o) => (o.warnings || []).some((w) => w.code === "hub_sync_failed")).length;
+  const skippedNotManaged = ops.filter((o) => o.status === "skipped" && o.error_code === "not_managed").length;
+
   return {
     id: job.id,
     kind: job.kind,
     status: job.status,
+    outcome: describeOutcome({ counts, warnings, skippedNotManaged }),
     initiatedEmail: job.initiated_email,
     createdAt: job.created_at,
     finishedAt: job.finished_at,

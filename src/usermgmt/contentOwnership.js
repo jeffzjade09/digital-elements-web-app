@@ -225,15 +225,26 @@ export async function deleteOnSite(staffUserId, websiteId, { reassignTarget, ide
     body: { confirm: true, reassign_target: reassignTarget ? Number(reassignTarget) : null },
   });
 
-  await query(
-    `update website_user_assignments
-        set state='removed', managed=false, wp_user_id=null, wp_user_login=null,
-            last_result=$3, last_error=null, last_error_code=null, updated_at=now()
-      where staff_user_id=$1 and website_id=$2`,
-    [staffUserId, websiteId, JSON.stringify({ deleted: true, at: new Date().toISOString() })]
-  );
+  // The account is gone from WordPress at this point and nothing can undo that.
+  // If our own bookkeeping then fails, the honest report is "deleted, not
+  // recorded" — NOT a failed deletion, which would invite someone to run it
+  // again, and not a clean success, which would hide a row that now disagrees
+  // with the site. The caller turns this into the partial outcome.
+  let hubSynced = true;
+  try {
+    await query(
+      `update website_user_assignments
+          set state='removed', managed=false, wp_user_id=null, wp_user_login=null,
+              last_result=$3, last_error=null, last_error_code=null, updated_at=now()
+        where staff_user_id=$1 and website_id=$2`,
+      [staffUserId, websiteId, JSON.stringify({ deleted: true, at: new Date().toISOString() })]
+    );
+  } catch (err) {
+    console.error("[usermgmt] deleted on site but could not record it:", err.message);
+    hubSynced = false;
+  }
 
-  return { status: "removed", result: data, staff, site };
+  return { status: "deleted", hubSynced, result: data, staff, site };
 }
 
 async function resolveTriple(staffUserId, websiteId) {

@@ -212,9 +212,15 @@ function wpuRenderPanel() {
   if (WPU.tab === "audit") return wpuRenderAudit();
 }
 
-async function wpuRefresh({ teams = false, users = false } = {}) {
+async function wpuRefresh({ teams = false, users = false, assignments = false } = {}) {
   if (teams) WPU.teams = (await wpuApi("/teams")).teams;
   if (users) WPU.users = (await wpuApi("/users")).users;
+  // The Websites column of the user list is rendered ENTIRELY from this cache,
+  // which used to be fetched once at first load and never again. So a deletion
+  // updated the database correctly and the list went on drawing the row it had
+  // been holding since the page opened — the "1/1 synced" after a deletion.
+  // Anything that can change an assignment has to ask for this.
+  if (assignments) WPU.assignments = (await wpuApi("/assignments")).assignments || [];
   wpuRenderPanel();
 }
 
@@ -1484,7 +1490,10 @@ const WPU_OP_STATE = {
   linked:      { label: "Linked",     cls: "ok" },
   updated:     { label: "Updated",    cls: "ok" },
   skipped:     { label: "No change",  cls: "none" },
+  // These two used to share a row in this map, and the word they shared was
+  // the gentler one — so a deletion reported itself as "No longer managed".
   removed:     { label: "No longer managed", cls: "ok" },
+  deleted:     { label: "Deleted",    cls: "ok" },
   failed:      { label: "Failed",     cls: "bad" },
   interrupted: { label: "Interrupted", cls: "warn" },
 };
@@ -1527,10 +1536,15 @@ function wpuWatchJob(jobId) {
   WPU_JOB.timer = setInterval(tick, 1500);
 }
 
-function wpuCloseJob() {
+async function wpuCloseJob() {
   if (WPU_JOB.timer) { clearInterval(WPU_JOB.timer); WPU_JOB.timer = null; }
   wpuCloseModal();
   if (WPU.tab === "websites") wpuRenderWebsites(true);
+  // A job is the one thing that definitely changed assignments. Re-read them
+  // rather than leaving the list describing the world as it was before.
+  try {
+    await wpuRefresh({ users: true, assignments: true });
+  } catch (e) { /* the list stays as it was; a reload will correct it */ }
 }
 
 function wpuRenderProgress() {
@@ -1586,9 +1600,14 @@ function wpuRenderProgress() {
       </table>
     </div>
 
-    ${job.done ? `<div class="wpu-note" style="margin-top:12px">
-      Finished — ${esc(job.status)}. Each website was handled independently, so a failure
-      on one didn’t affect the others.
+    ${job.done && job.outcome ? `<div class="wpu-outcome ${esc(job.outcome.state)}" style="margin-top:12px">
+      <strong>${esc(job.outcome.state === "ok" ? "Finished"
+        : job.outcome.state === "partial" ? "Finished with problems" : "Didn’t finish")}</strong>
+      <ul style="margin:6px 0 0; padding-left:18px">
+        ${job.outcome.lines.map((l) => `<li>${esc(l)}</li>`).join("")}
+      </ul>
+      <div class="wpu-note" style="margin-top:8px">Each website was handled independently, so a
+      failure on one didn’t affect the others.</div>
     </div>` : ""}`;
 
   if (actionsEl) {
