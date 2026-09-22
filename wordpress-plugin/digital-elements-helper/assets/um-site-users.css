@@ -1,61 +1,329 @@
 /* Team Members — adding Digital Elements colleagues to this website.
-   Follows the DE Monitoring panel's existing look so the screen belongs to the
-   same plugin rather than announcing itself as a different one. */
+ *
+ * Follows the DE Monitoring panel's existing look so the screen belongs to the
+ * same plugin rather than announcing itself as a different one, and WordPress's
+ * own admin language within that: #2271b1 for anything primary, white cards on
+ * the grey page, #dcdcde borders, small radii, compact type.
+ *
+ * SCOPE. Every selector below begins with .deheled-tm — there is no bare
+ * element, :root or global admin selector anywhere in this file, so loading it
+ * cannot reach another screen. It is enqueued on this page's hook only.
+ */
 
-.deheled-tm-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 18px 0 14px; }
-.deheled-tm-bar .deheled-tm-spacer { flex: 1; }
-.deheled-tm-role { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
-.deheled-tm-role select { min-width: 220px; }
-.deheled-tm-selected { color: #50575e; }
+/* ------------------------------------------------------------------ header */
 
-.deheled-tm-msg { min-height: 20px; margin: 8px 0; font-weight: 600; }
-.deheled-tm-msg.bad { color: #b32d2e; }
-.deheled-tm-msg.ok { color: #007017; }
+.deheled-tm-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 6px 0 16px;
+}
+.deheled-tm-h1 { margin: 0; padding: 0; font-size: 23px; line-height: 1.3; font-weight: 400; }
+.deheled-tm-lede { margin: 2px 0 0; color: #646970; font-size: 13px; }
+.deheled-tm-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding-top: 4px; }
 
-.deheled-tm-team { background: #fff; border: 1px solid #dcdcde; border-radius: 6px; margin-bottom: 14px; }
-.deheled-tm-team-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 12px 16px; border-bottom: 1px solid #f0f0f1; }
-.deheled-tm-team-head h3 { margin: 0; font-size: 14px; }
-.deheled-tm-count { color: #787c82; font-weight: 400; }
+/* A disabled primary still has to read as the primary action, just unavailable. */
+.deheled-tm [aria-disabled="true"] { opacity: .55; cursor: default; pointer-events: none; }
 
-.deheled-tm-members { margin: 0; }
-.deheled-tm-member { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin: 0; padding: 9px 16px; border-bottom: 1px solid #f6f7f7; }
+/* ----------------------------------------------------------------- summary */
+
+.deheled-tm-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.deheled-tm-stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid #dcdcde;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.deheled-tm-stat-icon {
+  width: 34px; height: 34px; flex-shrink: 0;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: #f0f0f1; color: #50575e;
+  font-size: 14px; font-weight: 600;
+}
+.deheled-tm-stat-icon.is-teams   { background: #e8f0fa; color: #2271b1; }
+.deheled-tm-stat-icon.is-members { background: #e8f0fa; color: #2271b1; }
+.deheled-tm-stat-icon.is-added   { background: #edfaef; color: #007017; }
+.deheled-tm-stat-icon.is-chosen  { background: #f0f0f1; color: #50575e; }
+.deheled-tm-stat-value { display: block; font-size: 21px; font-weight: 600; line-height: 1.1; color: #1d2327; }
+.deheled-tm-stat-label { display: block; font-size: 12px; color: #646970; margin-top: 2px; }
+
+/* ----------------------------------------------------------------- toolbar */
+
+.deheled-tm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: #fff;
+  border: 1px solid #dcdcde;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 16px;
+}
+.deheled-tm-field { display: flex; align-items: center; }
+.deheled-tm-search { position: relative; flex: 1 1 260px; min-width: 200px; }
+.deheled-tm-search input[type="search"] { width: 100%; }
+.deheled-tm-toolbar select { max-width: 220px; }
+.deheled-tm-toolbar .deheled-tm-spacer { flex: 1 1 auto; }
+.deheled-tm-count { color: #50575e; font-size: 13px; white-space: nowrap; }
+
+/* Labels that name a control for a screen reader without repeating it on screen.
+   Clip rather than display:none, which would take them out of the a11y tree. */
+.deheled-tm-sronly {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+  overflow: hidden; white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- team cards */
+
+.deheled-tm-teams {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.deheled-tm-team {
+  background: #fff;
+  border: 1px solid #dcdcde;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.deheled-tm-team[hidden] { display: none; }
+
+.deheled-tm-team-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #f0f0f1;
+}
+.deheled-tm-team-head h2 {
+  margin: 0; padding: 0;
+  font-size: 14px; font-weight: 600; color: #1d2327;
+  display: inline-flex; align-items: baseline; gap: 7px;
+}
+.deheled-tm-team-count { color: #787c82; font-weight: 400; font-size: 13px; }
+.deheled-tm-team-head .deheled-tm-spacer { flex: 1 1 auto; }
+
+/* The expand/collapse control. A real button, so it is keyboard-operable and
+   announces its own state through aria-expanded. */
+.deheled-tm-toggle {
+  background: none; border: 1px solid transparent; border-radius: 4px;
+  cursor: pointer; color: #50575e;
+  width: 28px; height: 28px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; line-height: 1;
+}
+.deheled-tm-toggle:hover { background: #f0f0f1; color: #1d2327; }
+.deheled-tm-toggle:focus-visible { outline: 2px solid #2271b1; outline-offset: 1px; }
+.deheled-tm-toggle .deheled-tm-caret { transition: transform .15s ease; font-size: 14px; }
+.deheled-tm-toggle[aria-expanded="false"] .deheled-tm-caret { transform: rotate(-90deg); }
+
+.deheled-tm-selectall {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #f0f0f1;
+  font-size: 13px; color: #50575e;
+}
+.deheled-tm-selectall label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.deheled-tm-team.is-collapsed .deheled-tm-selectall,
+.deheled-tm-team.is-collapsed .deheled-tm-members { display: none; }
+
+/* ----------------------------------------------------------- member rows */
+
+.deheled-tm-members { margin: 0; padding: 0; list-style: none; }
+.deheled-tm-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid #f6f7f7;
+  min-height: 38px;
+}
 .deheled-tm-member:last-child { border-bottom: none; }
-.deheled-tm-member label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
-/* Already here: present for completeness, not actionable. */
-.deheled-tm-member.is-present { opacity: .75; }
-.deheled-tm-name { display: inline-flex; flex-direction: column; line-height: 1.3; }
-.deheled-tm-name small { color: #787c82; }
-.deheled-tm-badges { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.deheled-tm-member[hidden] { display: none; }
+.deheled-tm-member input[type="checkbox"] { margin: 0; flex-shrink: 0; }
 
-.deheled-tm-chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
-  border-radius: 10px; background: #f0f0f1; color: #50575e; }
-.deheled-tm-chip.ok { background: #edfaef; color: #007017; }
-.deheled-tm-chip.warn { background: #fcf9e8; color: #8a6400; }
-.deheled-tm-chip.bad { background: #fcf0f1; color: #b32d2e; }
+/* A member already on this site is context, not an action. Dimming alone would
+   be the only signal, so the badge says it in words as well. */
+.deheled-tm-member.is-present .deheled-tm-avatar { opacity: .8; }
 
-.deheled-tm-table { margin-top: 12px; }
+.deheled-tm-avatar {
+  width: 28px; height: 28px; flex-shrink: 0;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  background: #e8f0fa; color: #2271b1;
+}
+.deheled-tm-avatar.t1 { background: #ede9fe; color: #6d4aff; }
+.deheled-tm-avatar.t2 { background: #fce7f3; color: #be185d; }
+.deheled-tm-avatar.t3 { background: #dcfce7; color: #15803d; }
+.deheled-tm-avatar.t4 { background: #fef3c7; color: #92400e; }
+.deheled-tm-avatar.t5 { background: #e0f2fe; color: #0369a1; }
+
+.deheled-tm-who { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1 1 auto; }
+.deheled-tm-name { font-size: 13px; color: #1d2327; white-space: nowrap; }
+.deheled-tm-email {
+  font-size: 12px; color: #787c82;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.deheled-tm-badges { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.deheled-tm-rowaction { flex-shrink: 0; margin-left: 2px; }
+
+/* A single placement for the "why there's no button" sentence: a help cursor
+   carrying the full explanation, so the row stays one line high. */
+.deheled-tm-why {
+  font-size: 12px; color: #787c82;
+  border-bottom: 1px dotted #c3c4c7;
+  cursor: help;
+}
+/* It is reachable by keyboard, so it has to be visible when reached. */
+.deheled-tm-why:focus-visible { outline: 2px solid #2271b1; outline-offset: 2px; }
+
+/* --------------------------------------------------------------- badges */
+
+.deheled-tm-chip {
+  display: inline-block;
+  font-size: 11px; font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 10px;
+  background: #f0f0f1; color: #50575e;
+  white-space: nowrap;
+}
+.deheled-tm-chip.ok   { background: #edfaef; color: #007017; }
+.deheled-tm-chip.warn { background: #fcf9e8; color: #8a6d0b; }
+.deheled-tm-chip.bad  { background: #fcf0f1; color: #b32d2e; }
+.deheled-tm-chip.role { background: #f6f7f7; color: #646970; font-weight: 400; }
+.deheled-tm-chip[title] { cursor: help; }
+
+/* -------------------------------------------------------- notices & empty */
+
+.deheled-tm-msg { margin: 0 0 12px; font-size: 13px; min-height: 0; }
+.deheled-tm-msg:empty { display: none; }
+.deheled-tm-msg.info { color: #50575e; }
+.deheled-tm-msg.ok   { color: #007017; }
+.deheled-tm-msg.warn { color: #8a6d0b; }
+.deheled-tm-msg.bad  { color: #b32d2e; }
+
+/* A failed refresh keeps the roster and offers the retry here, so the notice
+   is a bar rather than a replacement for the data. */
+.deheled-tm-notice {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: #fff; border: 1px solid #dcdcde; border-left: 4px solid #f5b945;
+  border-radius: 8px; padding: 10px 14px; margin: 0 0 14px;
+  font-size: 13px; color: #50575e;
+}
+.deheled-tm-notice.bad { border-left-color: #ef4444; }
+.deheled-tm-notice[hidden] { display: none; }
+
+.deheled-tm-empty {
+  background: #fff; border: 1px solid #dcdcde; border-radius: 8px;
+  padding: 28px 20px; text-align: center; color: #646970; font-size: 13px;
+}
+.deheled-tm-empty[hidden] { display: none; }
+
+.deheled-tm-loading { color: #646970; font-size: 13px; padding: 20px 0; }
+
+/* ------------------------------------------------------- other site users */
+
+.deheled-tm-others {
+  margin-top: 16px;
+  background: #fff; border: 1px solid #dcdcde; border-radius: 8px;
+  padding: 12px 14px;
+}
+.deheled-tm-others summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.deheled-tm-others summary:focus-visible { outline: 2px solid #2271b1; outline-offset: 2px; }
+.deheled-tm-others .description { margin: 8px 0; }
+
+/* ------------------------------------------------------------ sticky bar */
+
+/* Space is reserved unconditionally, so the bar appearing on the first
+   selection overlays it instead of pushing the page down. Nothing moves. */
+.deheled-tm-panel { padding-bottom: 64px; }
+
+.deheled-tm-stickybar {
+  position: fixed;
+  left: 160px; right: 0; bottom: 0;
+  z-index: 9;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #fff;
+  border-top: 1px solid #dcdcde;
+  box-shadow: 0 -1px 3px rgba(0, 0, 0, .04);
+  padding: 10px 20px;
+  transition: opacity .12s ease, transform .12s ease;
+}
+.deheled-tm-stickybar .deheled-tm-spacer { flex: 1 1 auto; }
+.deheled-tm-stickybar-count { font-weight: 600; font-size: 13px; color: #1d2327; }
+
+/* Hidden by attribute rather than a class, so it is out of the accessibility
+   tree entirely when there is no selection to act on. */
+.deheled-tm-stickybar[hidden] { display: none; }
+
+/* WordPress's own menu states, which change where the bar has to start. */
+.folded .deheled-tm-stickybar { left: 36px; }
+.auto-fold .deheled-tm-stickybar { left: 36px; }
+
+/* ------------------------------------------------- review & results tables */
+
+.deheled-tm-table { margin-top: 12px; background: #fff; }
 .deheled-tm-table td small { display: block; color: #787c82; }
 .deheled-tm-blocker { color: #b32d2e; font-size: 12px; margin-top: 4px; }
-.deheled-tm-warn { color: #8a6400; font-size: 12px; margin-top: 4px; }
+.deheled-tm-warn { color: #8a6d0b; font-size: 12px; margin-top: 4px; }
 .deheled-tm-actions { margin-top: 16px; }
 .deheled-tm-confirm { margin: 14px 0; }
 .deheled-tm-confirm label { display: flex; gap: 9px; align-items: flex-start; }
-
-.deheled-tm-others { margin-top: 20px; background: #fff; border: 1px solid #dcdcde; border-radius: 6px; padding: 12px 16px; }
-.deheled-tm-others summary { cursor: pointer; font-weight: 600; }
-.deheled-tm-others .description { margin: 8px 0; }
+.deheled-tm-h2 { font-size: 16px; margin: 0 0 4px; }
 
 .deheled-tm-unavailable h2 { margin-top: 0; }
 
-/* Invitation status, on a member who is already on this site. */
-.deheled-tm-invite-action { display: block; margin-top: 4px; }
-.deheled-tm-why {
-  display: block;
-  margin-top: 4px;
-  color: #646970;
-  font-size: 12px;
-  max-width: 52ch;
+/* --------------------------------------------------------------- responsive */
+
+/* Tablet: the two-column grid stops earning its place before the sidebar does. */
+@media screen and (max-width: 1100px) {
+  .deheled-tm-teams { grid-template-columns: minmax(0, 1fr); }
+  .deheled-tm-summary { grid-template-columns: repeat(2, 1fr); }
 }
-.deheled-tm-chip.warn { background: #fcf9e8; border-color: #dba617; color: #8a6d0b; }
+
+@media screen and (max-width: 782px) {
+  /* WordPress collapses its own sidebar at this width. */
+  .deheled-tm-stickybar,
+  .folded .deheled-tm-stickybar,
+  .auto-fold .deheled-tm-stickybar { left: 0; padding: 10px 12px; }
+  .deheled-tm-summary { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .deheled-tm-toolbar { padding: 10px; }
+  .deheled-tm-search { flex-basis: 100%; }
+  .deheled-tm-toolbar select { max-width: none; flex: 1 1 140px; }
+  .deheled-tm-count { width: 100%; }
+  /* The row wraps rather than truncating the address to nothing. */
+  .deheled-tm-who { flex-wrap: wrap; gap: 0 8px; }
+  .deheled-tm-email { flex-basis: 100%; }
+  .deheled-tm-member { flex-wrap: wrap; }
+  .deheled-tm-badges { margin-left: 38px; }
+  .deheled-tm-panel { padding-bottom: 88px; }
+}
+
+@media screen and (max-width: 480px) {
+  .deheled-tm-summary { grid-template-columns: 1fr; }
+  .deheled-tm-header-actions { width: 100%; }
+}
+
+/* Someone who has asked for less motion gets none of the caret's. */
+@media (prefers-reduced-motion: reduce) {
+  .deheled-tm-toggle .deheled-tm-caret,
+  .deheled-tm-stickybar { transition: none; }
+}

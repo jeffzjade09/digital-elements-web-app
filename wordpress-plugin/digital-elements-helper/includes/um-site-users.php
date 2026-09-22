@@ -285,8 +285,16 @@ add_action('admin_enqueue_scripts', function ($hook) {
     wp_localize_script('deheled-team-members', 'DEHELED_TM', array(
         'ajaxUrl' => admin_url('admin-ajax.php'),
         'nonce'   => wp_create_nonce('deheled_site_users'),
+        // Identifies THIS website in the browser's own storage, so remembering
+        // which team cards are collapsed doesn't leak across the forty-odd
+        // sites a colleague works on. A display preference and nothing else.
+        'siteKey' => md5(home_url()),
         'strings' => array(
             'genericError' => 'Something went wrong. Please try again.',
+            'loading'      => 'Loading the roster…',
+            'refreshing'   => 'Refreshing the roster…',
+            'loaded'       => 'Roster updated.',
+            'kept'         => 'Couldn\'t refresh. Showing what was already loaded.',
         ),
     ));
 });
@@ -301,10 +309,19 @@ function deheled_site_users_render() {
         $gate = deheled_site_users_gate($roster);
     }
 
+    // The header is printed here rather than by the script so that it is also
+    // there for the unavailable states below, which never reach the panel.
+    // Its right-hand slot is filled in by the script once a roster exists;
+    // empty is the correct state for it when one doesn't.
     echo '<div class="wrap deheled deheled-tm">';
-    echo '<h1 class="deheled-title"><span>Team Members</span></h1>';
-    echo '<p class="deheled-sub">Add Digital Elements colleagues to <strong>' . esc_html(home_url()) . '</strong>. '
+    echo '<div class="deheled-tm-header">';
+    echo '<div class="deheled-tm-header-text">';
+    echo '<h1 class="deheled-tm-h1">Team Members</h1>';
+    echo '<p class="deheled-tm-lede">Add Digital Elements colleagues to <strong>' . esc_html(home_url()) . '</strong>. '
        . 'Accounts are created by Digital Elements, not by this plugin.</p>';
+    echo '</div>';
+    echo '<div class="deheled-tm-header-actions" id="deheled-tm-header-actions"></div>';
+    echo '</div>';
 
     if (empty($gate['ok'])) {
         echo '<div class="deheled-license warn deheled-tm-unavailable">';
